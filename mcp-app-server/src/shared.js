@@ -547,13 +547,19 @@ function filterVertexCellIds(graph, ids)
 function isContainerVertex(cell)
 {
   if (cell == null || !cell.vertex) return false;
+  // A vertex with children is a container right now, no matter what
+  // the style says.
+  if (cell.children != null && cell.children.length > 0) return true;
   var s = cell.style || '';
+  if (typeof s !== 'string') return false;
+  // Generic drawio container marker
+  if (s.indexOf('container=1') >= 0) return true;
   // Bare shape token: "swimlane;..." or "...;group;..."
   if (/(?:^|;)\s*(?:swimlane|group)\s*(?:;|$)/.test(s)) return true;
-  // shape=swimlane / shape=group
-  if (/(?:^|;)\s*shape\s*=\s*(?:swimlane|group)\b/.test(s)) return true;
-  // Generic drawio container marker
-  if (/(?:^|;)\s*container\s*=\s*1\b/.test(s)) return true;
+  // shape=anything-with-group / anything-with-swimlane: catches AWS
+  // group shapes (mxgraph.aws4.group, mxgraph.aws4.groupCenter, …)
+  // that don't carry container=1 explicitly.
+  if (/(?:^|;)\s*shape\s*=\s*[^;]*(?:group|swimlane)/i.test(s)) return true;
   return false;
 }
 
@@ -626,14 +632,13 @@ function trackPartialFocus(graph, topNewIds)
     return;
   }
 
+  streamMode = 'xml';
   var model = graph.getModel();
   var vertexCount = 0;
   var edgeCount = 0;
   var otherCount = 0;
-  var containerCount = 0;
   var newVertexIds = [];
   var newEdgeIds = [];
-  var containerIds = [];
   var filteredTopNew = [];
 
   for (var i = 0; i < topNewIds.length; i++)
@@ -643,13 +648,10 @@ function trackPartialFocus(graph, topNewIds)
 
     if (c.vertex)
     {
-      if (isContainerVertex(c))
-      {
-        containerCount++;
-        containerIds.push(topNewIds[i]);
-        continue;
-      }
-
+      // Containers are admitted to the queue: filterRecentAncestors
+      // demotes them the moment a descendant joins, so a container's
+      // bbox only contributes during the brief "new region" window
+      // before its children stream in — exactly the widen we want.
       vertexCount++;
       newVertexIds.push(topNewIds[i]);
       filteredTopNew.push(topNewIds[i]);
@@ -666,25 +668,14 @@ function trackPartialFocus(graph, topNewIds)
     }
   }
 
-  // Expand edges and drop any endpoint that is itself a container —
-  // the camera should focus on content inside the container, not the
-  // container's own bbox.
   var ids = expandEdgesToEndpointVertexIds(graph, filteredTopNew);
-  ids = ids.filter(function(id)
-  {
-    var cc = model.getCell(id);
-    return cc != null && !isContainerVertex(cc);
-  });
-
 
   if (ids.length === 0)
   {
-    // Nothing trackable in this partial (e.g. only a container was
-    // added). Don't disturb the existing focus.
     return;
   }
 
-  if (hasEdge)
+  if (edgeCount > 0)
   {
     replaceRecentCells(ids);
   }
@@ -758,6 +749,22 @@ function isMermaidHorizontalFlowchart(text)
     return orient === 'LR' || orient === 'RL';
   }
   return false;
+}
+
+/**
+ * True when the Mermaid source begins with a "--- title: ... ---"
+ * frontmatter block. ELK's horizontalFlow layout has no concept of a
+ * title and stuffs it into the leftmost layer alongside the flow nodes,
+ * crushing the diagram. Used to suppress a requested horizontalFlow
+ * postLayout (verticalFlow puts the title in its own top row and is
+ * fine, so it isn't blocked).
+ */
+function mermaidHasTitleFrontmatter(text)
+{
+  if (text == null || typeof text !== 'string') return false;
+  var m = /^\\s*---\\s*\\r?\\n([\\s\\S]*?)\\r?\\n---\\s*(\\r?\\n|$)/.exec(text);
+  if (!m) return false;
+  return /^\\s*title\\s*:/m.test(m[1]);
 }
 
 /**
@@ -2929,7 +2936,18 @@ var STREAM_MIN_SCALE = 0.05;
 // inflated rect clips back to wholeBBox and there's no soft-follow.
 // No TTL: see getRecentVertexIds for why time-based aging was removed
 // (caused fit-whole yo-yos during LLM pauses between vertex partials).
-var STREAM_RECENT_LIMIT = 4;
+// Limit of 1: focus on the single most recent cell. Two leaves at
+// opposite ends of the diagram (e.g. a top-level service and a far-
+// right S3 bucket) would otherwise unite into a wide bbox and force a
+// big zoom-out. With limit=1 the camera simply pans between leaves
+// in the slow XML streaming case.
+var STREAM_RECENT_LIMIT = 1;
+// Mermaid streams differently: the parser fires once with all of
+// the diagram's cells in a single call. Limiting the queue to 1
+// would discard 15 of 16 cells and give the camera nothing useful
+// to focus on. Restore the original 4-cell cap for that path so
+// the camera sits on the most recently-added cluster of nodes.
+var STREAM_RECENT_LIMIT_MERMAID = 4;
 // Context padding around the recent-cells bbox, expressed as a
 // fraction of the larger of (bbox width, bbox height). 0.4 keeps the
 // recent cells filling most of the camera with a comfortable margin —
@@ -2960,6 +2978,13 @@ var STREAM_BATCH_PULLBACK_MIN = 0.45;
 // diagram is bigger than the viewport. We never zoom IN past 1:1 —
 // that would inflate text past native size and look broken.
 var STREAM_FOLLOW_MAX_SCALE = 1.0;
+// Per-step zoom-out cap: when a new partial wants to widen the view,
+// the new target scale can drop to at most this fraction of the
+// previous target. Without this, a fresh container introduced after
+// a tight leaf focus would yank the camera all the way out to fit
+// the whole container; with it, the camera does a "slight pull-back
+// to show structure" then zooms back in on the next leaf.
+var STREAM_ZOOM_OUT_CAP = 0.7;
 // Extra space reserved at the bottom of the container so the diagram
 // never visually touches the toolbar / card edge.
 var STREAM_BOTTOM_GUTTER = 16;
@@ -2972,6 +2997,45 @@ var recentVertexQueue = [];
 // pull-back multiplier so big Mermaid partials zoom out further
 // than incremental XML appends.
 var lastBatchSize = 0;
+// Ring buffer of last N partial-arrival timestamps. Used to derive
+// the streaming cadence so transition durations adapt to how quickly
+// cells are being added (slow stream → longer transitions).
+var streamArrivalTimes = [];
+// Target scale of the previous streamFollowNewCells retarget. Drives
+// the per-step zoom-out cap (STREAM_ZOOM_OUT_CAP).
+var streamLastTargetScale = null;
+// The cap baseline frozen for the current partial: captured from
+// streamLastTargetScale on the FIRST call after queuedIds changes,
+// then held constant across subsequent calls (rAF / resize) so the
+// cap doesn't decay against its own just-applied output.
+var streamPartialBaseline = null;
+var streamLastQueueSig = '';
+// Threshold above which we treat a partial as "big batch" (Mermaid's
+// one-shot full diagram). Big batches skip the per-step cap and need
+// a wide focus to fit the whole new content.
+var STREAM_BIG_BATCH_THRESHOLD = 3;
+// 'xml' or 'mermaid' — set by trackPartialFocus / handleMermaidPartial
+// before they call trackRecentCells, so trackRecentCells can pick the
+// right queue limit and streamFollowNewCells can skip XML-specific
+// camera tweaks for the Mermaid path.
+var streamMode = null;
+
+
+/**
+ * Median delta between recent partial arrivals, in ms. Returns a
+ * sensible default when the buffer is too small to estimate.
+ */
+function getStreamCadenceMs()
+{
+  if (streamArrivalTimes.length < 2) return 1200;
+  var deltas = [];
+  for (var i = 1; i < streamArrivalTimes.length; i++)
+  {
+    deltas.push(streamArrivalTimes[i] - streamArrivalTimes[i - 1]);
+  }
+  deltas.sort(function(a, b) { return a - b; });
+  return deltas[Math.floor(deltas.length / 2)];
+}
 
 // Visible camera transform applied via CSS transform on the SVG. The
 // math matches mxGraph's scaleAndTranslate: a model point (Mx, My)
@@ -3056,9 +3120,29 @@ function trackRecentCells(ids)
     recentVertexQueue.push({ id: ids[i], t: now });
   }
 
-  if (recentVertexQueue.length > STREAM_RECENT_LIMIT)
+  // Per-mode queue cap. Mermaid's one-shot batch needs its original
+  // 4-cell window so the camera can focus on the latest cluster
+  // instead of the whole diagram. XML's incremental stream caps at 1
+  // (latest cell only), expanded by the partial's batch size for
+  // edge-endpoint pairs.
+  var effectiveLimit;
+  if (streamMode === 'mermaid')
   {
-    recentVertexQueue = recentVertexQueue.slice(-STREAM_RECENT_LIMIT);
+    effectiveLimit = STREAM_RECENT_LIMIT_MERMAID;
+  }
+  else
+  {
+    effectiveLimit = Math.max(STREAM_RECENT_LIMIT, ids.length);
+  }
+  if (recentVertexQueue.length > effectiveLimit)
+  {
+    recentVertexQueue = recentVertexQueue.slice(-effectiveLimit);
+  }
+
+  streamArrivalTimes.push(now);
+  if (streamArrivalTimes.length > 5)
+  {
+    streamArrivalTimes = streamArrivalTimes.slice(-5);
   }
 
   lastBatchSize = ids.length;
@@ -3108,6 +3192,43 @@ function getRecentVertexIds()
 }
 
 /**
+ * Drop any queued cell that is an ancestor of another queued cell.
+ * Without this, a queued container's bbox swallows its queued children
+ * (the union equals the container's own bounds) and the camera can't
+ * zoom in on action happening inside the group. With it, the deepest
+ * descendants win — when sibling groups are queued together neither is
+ * an ancestor of the other, so the union still grows and produces the
+ * brief pull-back at sibling-group boundaries.
+ */
+function filterRecentAncestors(model, ids)
+{
+  if (ids.length < 2) return ids;
+  var idSet = {};
+  for (var i = 0; i < ids.length; i++)
+  {
+    idSet[ids[i]] = true;
+  }
+  var drop = {};
+  for (var i = 0; i < ids.length; i++)
+  {
+    var cell = model.getCell(ids[i]);
+    if (cell == null) continue;
+    var p = model.getParent(cell);
+    while (p != null)
+    {
+      if (p.id != null && idSet[p.id]) drop[p.id] = true;
+      p = model.getParent(p);
+    }
+  }
+  var out = [];
+  for (var i = 0; i < ids.length; i++)
+  {
+    if (!drop[ids[i]]) out.push(ids[i]);
+  }
+  return out;
+}
+
+/**
  * Pick a transition duration that scales with the magnitude of the
  * camera change. Tiny nudges stay snappy (~MIN_MS); big finalize-style
  * settles get a longer, graceful transition (~MAX_MS) — long enough
@@ -3123,8 +3244,16 @@ function computeTransitionDuration(curS, curTx, curTy, tgtS, tgtTx, tgtTy, viewp
   // Normalize: scale change of 50% or translate of viewport-span both
   // count as "big" change (factor ~ 1).
   var factor = Math.min(1, Math.max(dS * 2, dPx / span));
+  // Cadence-aware ceiling: aim for transitions that complete just as
+  // the next partial arrives, so the camera glides continuously
+  // instead of sprinting + waiting. 0.9 leaves a tiny rest at the
+  // target before retargeting; clamped to a sane band so unusually
+  // fast or slow streams still behave.
+  var cadence = getStreamCadenceMs();
+  var maxMs = Math.max(STREAM_TRANSITION_MIN_MS,
+                       Math.min(2200, cadence * 0.9));
   var dur = STREAM_TRANSITION_MIN_MS +
-            (STREAM_TRANSITION_MAX_MS - STREAM_TRANSITION_MIN_MS) * factor;
+            (maxMs - STREAM_TRANSITION_MIN_MS) * factor;
   return Math.round(dur);
 }
 
@@ -3315,11 +3444,22 @@ function streamCamTick()
 
   streamCamTickActive = true;
 
+  // Cadence-aware slowdown: on slow streams (XML at ~3 s / cell) the
+  // default factors converge in ~1 s and the camera then sits idle for
+  // ~2 s before the next partial. Stretching the lerp factor keeps the
+  // camera drifting until the next target arrives, producing one
+  // continuous tracking motion. Gated to XML mode so Mermaid's one-
+  // shot fit isn't slowed by the cadence default.
+  var camCadenceMs = getStreamCadenceMs();
+  var camSlowFactor = (streamMode === 'xml' && camCadenceMs > 1500)
+    ? Math.max(0.4, 1500 / camCadenceMs)
+    : 1.0;
+
   // Stage 1: smoothed target lerps toward raw target. This filters
   // out per-partial bbox jumps (e.g. a far-spanning edge that
   // momentarily expands the focus rect) so the camera doesn't have to
   // chase them all the way before the next partial overrides.
-  var kT = STREAM_TARGET_LERP_FACTOR;
+  var kT = STREAM_TARGET_LERP_FACTOR * camSlowFactor;
   streamCamSmoothScale += (t.scale - streamCamSmoothScale) * kT;
   streamCamSmoothTx += (t.tx - streamCamSmoothTx) * kT;
   streamCamSmoothTy += (t.ty - streamCamSmoothTy) * kT;
@@ -3352,7 +3492,7 @@ function streamCamTick()
     return;
   }
 
-  var kC = STREAM_LERP_FACTOR;
+  var kC = STREAM_LERP_FACTOR * camSlowFactor;
   writeSvgTransform(
     t.graph,
     viewTransform.scale + (streamCamSmoothScale - viewTransform.scale) * kC,
@@ -3446,8 +3586,26 @@ function streamFollowNewCells(graph, immediate, skipResize)
   fitWholeS = Math.max(fitWholeS, STREAM_MIN_SCALE);
 
   // Pick the focus rect: recent vertices when present (with context
-  // padding), otherwise the whole diagram.
-  var recentIds = getRecentVertexIds();
+  // padding), otherwise the whole diagram. Ancestors of other queued
+  // cells are filtered out so a container's bbox doesn't swallow its
+  // queued children — the camera tightens on the deepest descendants.
+  // Fresh containers (no descendants yet) are kept in focus so groups
+  // briefly widen the camera when introduced; the per-step scale-drop
+  // cap below limits how far the widen actually goes.
+  var queuedIds = getRecentVertexIds();
+  var recentIds = filterRecentAncestors(model, queuedIds);
+
+  // Freeze the cap baseline on the first call for each new queue
+  // signature. Subsequent calls within the same partial (rAF spring
+  // ticks, resize events) reuse the same baseline so the cap stays
+  // stable instead of decaying against its own just-applied output.
+  var qSig = queuedIds.join('|');
+  if (qSig !== streamLastQueueSig)
+  {
+    streamPartialBaseline = streamLastTargetScale;
+    streamLastQueueSig = qSig;
+  }
+
   var focusRect;
 
   if (recentIds.length > 0)
@@ -3473,7 +3631,14 @@ function streamFollowNewCells(graph, immediate, skipResize)
     }
     else
     {
-      focusRect = wholeBBox;
+      // Cell IDs are in the queue but their model entries haven't
+      // landed yet — there's a brief gap between trackPartialFocus
+      // appending to the queue and the cell being inserted into the
+      // streamGraph. Falling back to wholeBBox here would zoom the
+      // camera out for ~300ms before the cell finally registers and
+      // we tighten back in: the visible "strange zoom-out" between
+      // siblings. Keep the previous target instead.
+      return;
     }
   }
   else
@@ -3509,6 +3674,19 @@ function streamFollowNewCells(graph, immediate, skipResize)
     targetScale = Math.max(STREAM_MIN_SCALE, targetScale * batchPullBack);
   }
 
+  // Per-step zoom-out cap: limit how far the camera can pull back in
+  // a single retarget when streaming incrementally. Skipped for big-
+  // batch partials (Mermaid arrives in one ~16-cell chunk and
+  // genuinely wants to fit the whole new content). The baseline is
+  // frozen for the duration of this partial so the cap stays stable
+  // across rAF / resize re-invocations.
+  if (recentIds.length > 0 && lastBatchSize <= STREAM_BIG_BATCH_THRESHOLD &&
+      streamPartialBaseline != null && targetScale < streamPartialBaseline)
+  {
+    var minAllowedScale = streamPartialBaseline * STREAM_ZOOM_OUT_CAP;
+    if (targetScale < minAllowedScale) targetScale = minAllowedScale;
+  }
+
   var cx = (focusRect.minX + focusRect.maxX) / 2;
   var cy = (focusRect.minY + focusRect.maxY) / 2;
   var targetTx = (cw / targetScale) / 2 - cx;
@@ -3531,6 +3709,14 @@ function streamFollowNewCells(graph, immediate, skipResize)
   if (dS < 0.003 && dTx < 1.5 && dTy < 1.5)
   {
     return;
+  }
+
+  // Remember the committed target so the next retarget's zoom-out
+  // cap has a baseline. Only track during soft-follow; the empty-
+  // queue (fit-whole) path shouldn't influence streaming caps.
+  if (recentIds.length > 0)
+  {
+    streamLastTargetScale = targetScale;
   }
 
   if (immediate)
@@ -3599,6 +3785,11 @@ function endStreaming()
   updateZoomFitButtonUi();
   recentVertexQueue = [];
   lastBatchSize = 0;
+  streamArrivalTimes = [];
+  streamLastTargetScale = null;
+  streamPartialBaseline = null;
+  streamLastQueueSig = '';
+  streamMode = null;
   viewTransform = { scale: 1, tx: 0, ty: 0 };
   viewTransformSvg = null;
   lastFinalizedKey = null;
@@ -4229,7 +4420,10 @@ function customZoomToScaleAt(px, py, targetScale)
   if (Math.abs(toS - fromS) < 0.001) return;
   var toTx = px / toS - anchorMx;
   var toTy = py / toS - anchorMy;
-  animateCameraTo(toS, toTx, toTy, 320);
+  // Same PAN_KEEP_MARGIN clamp as drag-pan so a dblclick near the edge
+  // can't push the bbox so far off-screen there's no recovery.
+  var c = clampPan(toS, toTx, toTy);
+  animateCameraTo(toS, c.tx, c.ty, 320);
 }
 
 /**
@@ -4691,6 +4885,7 @@ function handleMermaidPartial(partialMermaid)
     return;
   }
 
+  streamMode = 'mermaid';
   var healed = healMermaidText(partialMermaid);
 
   if (healed == null)
@@ -4880,10 +5075,16 @@ app.ontoolinputpartial = function(params)
       if (hasSibling)
       {
         mermaidEarlyFinalizeFired = true;
+        var earlyPostLayout = args.postLayout || null;
+        if (earlyPostLayout === 'horizontalFlow' &&
+            mermaidHasTitleFrontmatter(partialMermaid))
+        {
+          earlyPostLayout = null;
+        }
         var earlyOpts = {
           skipIntroAnim: true,
           fadeIn: true,
-          postLayout: args.postLayout || null,
+          postLayout: earlyPostLayout,
           startNodeIds: args.startNodeIds || null,
           endNodeIds: args.endNodeIds || null,
           replaceMode: true,
@@ -5026,9 +5227,17 @@ app.ontoolinput = function(params)
   var postLayout = args.postLayout || null;
   var startNodeIds = args.startNodeIds || null;
   var endNodeIds = args.endNodeIds || null;
-  var layoutOpts = { skipIntroAnim: true, fadeIn: true, postLayout: postLayout, startNodeIds: startNodeIds, endNodeIds: endNodeIds };
 
   var mermaidText = args.mermaid;
+
+  if (postLayout === 'horizontalFlow' &&
+      mermaidText != null && typeof mermaidText === 'string' &&
+      mermaidHasTitleFrontmatter(mermaidText))
+  {
+    postLayout = null;
+  }
+
+  var layoutOpts = { skipIntroAnim: true, fadeIn: true, postLayout: postLayout, startNodeIds: startNodeIds, endNodeIds: endNodeIds };
 
   if (mermaidText != null && typeof mermaidText === 'string')
   {
@@ -5111,6 +5320,11 @@ app.ontoolresult = function(result)
         postLayout = parsed.postLayout || null;
         startNodeIds = parsed.startNodeIds || null;
         endNodeIds = parsed.endNodeIds || null;
+        if (postLayout === 'horizontalFlow' &&
+            mermaidHasTitleFrontmatter(mermaidText))
+        {
+          postLayout = null;
+        }
       }
       else if (parsed && typeof parsed.xml === 'string')
       {
@@ -5332,7 +5546,11 @@ window.addEventListener('resize', function()
 {
   if (streamGraph == null) return;
   if (dblclickZoomedIn) return;
-  streamFollowNewCells(streamGraph, true);
+  // During an active stream a snap-fit kills any in-flight eased
+  // transition the moment Claude.ai's sendSizeChanged feedback fires
+  // (which it does whenever the diagram visually grows). Use the
+  // smooth path so the camera keeps gliding instead of jumping.
+  streamFollowNewCells(streamGraph, false);
 });
 
 app.connect().then(function()
