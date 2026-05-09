@@ -496,6 +496,180 @@ function filterVertexCellIds(graph, ids)
 }
 
 /**
+ * Returns true for cells that are visual frames / containers
+ * (swimlane, group, container=1) rather than content. We exclude these
+ * from the smart-camera focus queue: a swimlane often spans the whole
+ * page, so tracking it forces fit-whole and prevents the camera from
+ * focusing on the actual content cells being inserted inside it.
+ */
+function isContainerVertex(cell)
+{
+  if (cell == null || !cell.vertex) return false;
+  var s = cell.style || '';
+  // Bare shape token: "swimlane;..." or "...;group;..."
+  if (/(?:^|;)\s*(?:swimlane|group)\s*(?:;|$)/.test(s)) return true;
+  // shape=swimlane / shape=group
+  if (/(?:^|;)\s*shape\s*=\s*(?:swimlane|group)\b/.test(s)) return true;
+  // Generic drawio container marker
+  if (/(?:^|;)\s*container\s*=\s*1\b/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Like filterVertexCellIds, but for edges substitutes their source +
+ * target vertex IDs. Used by the XML streaming path so that an edge
+ * arriving in its own partial (after the connected vertices have aged
+ * out of recentVertexQueue) still focuses the camera on the endpoints
+ * being connected, instead of falling back to fit-whole zoom-out.
+ *
+ * Mermaid doesn't need this: a mermaid partial delivers vertices and
+ * edges together, so the vertices are already tracked when the edges
+ * land.
+ */
+function expandEdgesToEndpointVertexIds(graph, ids)
+{
+  if (graph == null || ids == null) return [];
+  var model = graph.getModel();
+  var out = [];
+  var seen = {};
+
+  for (var i = 0; i < ids.length; i++)
+  {
+    var cell = model.getCell(ids[i]);
+    if (cell == null) continue;
+
+    if (cell.vertex)
+    {
+      if (!seen[ids[i]])
+      {
+        seen[ids[i]] = true;
+        out.push(ids[i]);
+      }
+    }
+    else if (cell.edge)
+    {
+      var src = cell.source;
+      var tgt = cell.target;
+
+      if (src != null && src.id != null && src.vertex && !seen[src.id])
+      {
+        seen[src.id] = true;
+        out.push(src.id);
+      }
+
+      if (tgt != null && tgt.id != null && tgt.vertex && !seen[tgt.id])
+      {
+        seen[tgt.id] = true;
+        out.push(tgt.id);
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Decide how the smart camera should focus based on what just landed
+ * in this XML partial. Vertex-only partials append to recentVertexQueue
+ * (preserves the soft-follow accumulation that lets the camera ease
+ * across multiple incremental vertex partials). Partials that contain
+ * any edge replace the queue with the new content's vertices + edge
+ * endpoints, so the camera tightly tracks the edge being inserted
+ * instead of holding a wide bbox dragged over from older vertices.
+ */
+function trackPartialFocus(graph, topNewIds)
+{
+  if (graph == null || topNewIds == null || topNewIds.length === 0)
+  {
+    try { console.log('[drawio][partial] empty topNew — skip focus update'); } catch (_) {}
+    return;
+  }
+
+  var model = graph.getModel();
+  var vertexCount = 0;
+  var edgeCount = 0;
+  var otherCount = 0;
+  var containerCount = 0;
+  var newVertexIds = [];
+  var newEdgeIds = [];
+  var containerIds = [];
+  var filteredTopNew = [];
+
+  for (var i = 0; i < topNewIds.length; i++)
+  {
+    var c = model.getCell(topNewIds[i]);
+    if (c == null) { otherCount++; continue; }
+
+    if (c.vertex)
+    {
+      if (isContainerVertex(c))
+      {
+        containerCount++;
+        containerIds.push(topNewIds[i]);
+        continue;
+      }
+
+      vertexCount++;
+      newVertexIds.push(topNewIds[i]);
+      filteredTopNew.push(topNewIds[i]);
+    }
+    else if (c.edge)
+    {
+      edgeCount++;
+      newEdgeIds.push(topNewIds[i]);
+      filteredTopNew.push(topNewIds[i]);
+    }
+    else
+    {
+      otherCount++;
+    }
+  }
+
+  // Expand edges and drop any endpoint that is itself a container —
+  // the camera should focus on content inside the container, not the
+  // container's own bbox.
+  var ids = expandEdgesToEndpointVertexIds(graph, filteredTopNew);
+  ids = ids.filter(function(id)
+  {
+    var cc = model.getCell(id);
+    return cc != null && !isContainerVertex(cc);
+  });
+
+  var hasEdge = edgeCount > 0;
+  var mode = hasEdge ? 'REPLACE' : 'APPEND';
+
+  try
+  {
+    console.log('[drawio][partial] vCount=' + vertexCount +
+      ' eCount=' + edgeCount +
+      ' container=' + containerCount +
+      ' other=' + otherCount +
+      ' vIds=[' + newVertexIds.join(',') + ']' +
+      ' eIds=[' + newEdgeIds.join(',') + ']' +
+      ' containerIds=[' + containerIds.join(',') + ']' +
+      ' expanded=[' + ids.join(',') + ']' +
+      ' mode=' + mode);
+  }
+  catch (_) {}
+
+  if (ids.length === 0)
+  {
+    // Nothing trackable in this partial (e.g. only a container was
+    // added). Don't disturb the existing focus.
+    return;
+  }
+
+  if (hasEdge)
+  {
+    replaceRecentCells(ids);
+  }
+  else
+  {
+    trackRecentCells(ids);
+  }
+}
+
+/**
  * Trims a partial mermaid string so the parser doesn't choke on a
  * half-typed last line. Returns null when there isn't enough content
  * to attempt a parse yet (no complete line, or no body after the type
@@ -2316,13 +2490,11 @@ var STREAM_VIEWPORT_PADDING = 24;
 // Minimum scale clamp — large diagrams need to zoom out enough that
 // the whole bbox fits inside the container.
 var STREAM_MIN_SCALE = 0.05;
-// How long a cell counts as "recently added" for soft-follow.
-// Cells outside this window fall out of the focus bbox and become
-// passive context, so the camera stops following them.
-var STREAM_RECENT_TTL_MS = 2000;
 // Hard cap on queue length. Kept small so the focus bbox tracks just
 // the latest few cells — if it includes most of the diagram, the
 // inflated rect clips back to wholeBBox and there's no soft-follow.
+// No TTL: see getRecentVertexIds for why time-based aging was removed
+// (caused fit-whole yo-yos during LLM pauses between vertex partials).
 var STREAM_RECENT_LIMIT = 4;
 // Context padding around the recent-cells bbox, expressed as a
 // fraction of the larger of (bbox width, bbox height). 0.4 keeps the
@@ -2461,25 +2633,40 @@ function trackRecentCells(ids)
 }
 
 /**
- * Drop expired entries from recentVertexQueue and return the
- * surviving IDs. Mutating prune so the queue doesn't grow unbounded
- * when the LLM streams continuously.
+ * Replace recentVertexQueue with the given IDs. Used when an edge-only
+ * (or edge+vertex) XML partial arrives: we want the camera to focus
+ * tightly on the new edge being inserted, not on a wide bbox that
+ * mixes the new endpoints with stale vertices left over from earlier
+ * partials. Vertex-only partials keep the soft-follow append behavior.
+ */
+function replaceRecentCells(ids)
+{
+  recentVertexQueue = [];
+  if (ids == null || ids.length === 0)
+  {
+    lastBatchSize = 0;
+    try { console.log('[drawio][track] replace cleared'); } catch (_) {}
+    return;
+  }
+  trackRecentCells(ids);
+}
+
+/**
+ * Return the IDs currently in recentVertexQueue. The queue is bounded
+ * by STREAM_RECENT_LIMIT (newest cells push out older ones) and is
+ * cleared at finalizeStreamingView / endStreaming / customFitView.
+ *
+ * No time-based pruning: previously a 2 s TTL aged the queue out
+ * during LLM pauses, which made the camera glide to fit-whole between
+ * vertex partials and then snap back when the next cell arrived — a
+ * visible zoom-out / zoom-in yo-yo. The queue now just holds the most
+ * recent N cells until streaming finishes, so the camera stays on the
+ * latest content during pauses instead of repeatedly reverting to the
+ * overview.
  */
 function getRecentVertexIds()
 {
   if (recentVertexQueue.length === 0) return [];
-  var now = (typeof performance !== 'undefined' && performance.now)
-    ? performance.now() : Date.now();
-  var firstAlive = 0;
-
-  while (firstAlive < recentVertexQueue.length &&
-         now - recentVertexQueue[firstAlive].t > STREAM_RECENT_TTL_MS)
-  {
-    firstAlive++;
-  }
-
-  if (firstAlive > 0) recentVertexQueue = recentVertexQueue.slice(firstAlive);
-
   var ids = [];
   for (var i = 0; i < recentVertexQueue.length; i++)
   {
@@ -2559,6 +2746,12 @@ function clampPan(scale, tx, ty)
  */
 function applyViewTransform(graph, scale, tx, ty, immediate, durationMs)
 {
+  // External call cancels any in-flight streaming spring so drag/fit/
+  // finalize callers don't get fought over by the rAF lerp loop.
+  // The spring's own per-frame writes go through writeSvgTransform
+  // directly, not this entry point.
+  cancelStreamCameraSpring();
+
   if (graph == null || graph.container == null)
   {
     try { console.log('[drawio][apply-vt] abort: no graph/container'); } catch (_) {}
@@ -2591,19 +2784,167 @@ function applyViewTransform(graph, scale, tx, ty, immediate, durationMs)
   viewTransform.scale = scale;
   viewTransform.tx = tx;
   viewTransform.ty = ty;
+}
 
-  try
+// --- Streaming camera spring (two-stage rAF lerp) ---
+//
+// During streaming the camera follows a target that updates ~10x/sec
+// as new partials arrive. The *target itself* oscillates: each partial
+// recomputes a focus bbox from the recent-vertex queue, and as cells
+// enter/leave the bounded queue the bbox jumps — sometimes growing
+// (zoom out), sometimes shrinking (zoom in). A single lerp on the
+// camera follows those jumps faithfully, which reads as visible
+// in/out/in/out steps.
+//
+// Two-stage filter fixes that:
+//   raw target  --(STREAM_TARGET_LERP)-->  smoothed target  --(STREAM_LERP)-->  camera
+//
+// The smoothed target acts as a low-pass filter on the per-partial
+// jumps; the camera then follows the smoothed target. Combined, the
+// camera responds to a step in raw target as a 2nd-order low-pass —
+// short jitters die out before the camera moves much, longer-term
+// trends get followed continuously. Velocity is naturally continuous
+// at every stage; no transition restarts.
+//
+// Tuning:
+//   STREAM_TARGET_LERP_FACTOR (raw → smoothed): 0.10 ≈ 6.6-frame
+//     half-life. Filters out 2-3 partial worth of jitter.
+//   STREAM_LERP_FACTOR (smoothed → camera): 0.07 ≈ 9.5-frame half-life.
+//     Adds the steady-cam lag.
+//   Combined response to a target step is ~25 frames half-life, ~420 ms.
+//   Convergence: only when camera matches the raw target within tight
+//   thresholds (so all stages have settled).
+
+// Equal factors → critically-damped 2nd-order response (like a movie
+// steady-cam: natural S-curve velocity profile, no overshoot, no
+// oscillation). Slightly slower than before so big target jumps from
+// far-spanning edges fade out across more frames.
+var STREAM_TARGET_LERP_FACTOR = 0.07;
+var STREAM_LERP_FACTOR = 0.06;
+var streamCamTarget = null;
+// Smoothed target: initialized lazily on first setStreamCameraTarget,
+// reset on cancelStreamCameraSpring.
+var streamCamSmoothScale = null;
+var streamCamSmoothTx = 0;
+var streamCamSmoothTy = 0;
+var streamCamRaf = 0;
+// Reentrancy guard: writeSvgTransform calls from inside the spring
+// loop must not cancel the spring (cancelStreamCameraSpring is called
+// from applyViewTransform on every external set).
+var streamCamTickActive = false;
+
+function writeSvgTransform(graph, scale, tx, ty)
+{
+  if (graph == null || graph.container == null) return;
+  var svg = viewTransformSvg;
+  if (svg == null || !svg.isConnected)
   {
-    console.log(
-      '[drawio][apply-vt]' +
-      (rebound ? ' (REBOUND svg)' : '') +
-      ' immediate=' + !!immediate +
-      ' transition="' + svg.style.transition + '"' +
-      ' transform="' + svg.style.transform + '"' +
-      ' svgDims=' + (svg.getAttribute('width') || '?') + 'x' + (svg.getAttribute('height') || '?')
-    );
+    svg = graph.container.querySelector('svg');
+    viewTransformSvg = svg;
+    if (svg != null) svg.style.transformOrigin = '0 0';
   }
-  catch (_) {}
+  if (svg == null) return;
+  // No CSS transition — the rAF loop is the animation.
+  svg.style.transition = 'none';
+  svg.style.transform =
+    'scale(' + scale + ') translate(' + tx + 'px, ' + ty + 'px)';
+  viewTransform.scale = scale;
+  viewTransform.tx = tx;
+  viewTransform.ty = ty;
+}
+
+function setStreamCameraTarget(graph, scale, tx, ty)
+{
+  streamCamTarget = { graph: graph, scale: scale, tx: tx, ty: ty };
+
+  // Initialize the smoothed target lazily on the first call after a
+  // clean state (or after cancelStreamCameraSpring). Seeding it from
+  // the current camera position avoids a step jolt — the smoothed
+  // target then lerps from camera-position toward the raw target,
+  // which the camera also follows. After the first frame the smoothed
+  // target tracks raw target updates as a low-pass filter.
+  if (streamCamSmoothScale == null)
+  {
+    streamCamSmoothScale = viewTransform.scale;
+    streamCamSmoothTx = viewTransform.tx;
+    streamCamSmoothTy = viewTransform.ty;
+  }
+
+  if (streamCamRaf == 0)
+  {
+    streamCamRaf = requestAnimationFrame(streamCamTick);
+  }
+}
+
+function streamCamTick()
+{
+  streamCamRaf = 0;
+  if (streamCamTarget == null) return;
+
+  var t = streamCamTarget;
+
+  streamCamTickActive = true;
+
+  // Stage 1: smoothed target lerps toward raw target. This filters
+  // out per-partial bbox jumps (e.g. a far-spanning edge that
+  // momentarily expands the focus rect) so the camera doesn't have to
+  // chase them all the way before the next partial overrides.
+  var kT = STREAM_TARGET_LERP_FACTOR;
+  streamCamSmoothScale += (t.scale - streamCamSmoothScale) * kT;
+  streamCamSmoothTx += (t.tx - streamCamSmoothTx) * kT;
+  streamCamSmoothTy += (t.ty - streamCamSmoothTy) * kT;
+
+  // Stage 2: camera lerps toward the smoothed target.
+  var dsRaw = t.scale - viewTransform.scale;
+  var dtxRaw = t.tx - viewTransform.tx;
+  var dtyRaw = t.ty - viewTransform.ty;
+  var s2 = Math.max(viewTransform.scale, t.scale, 0.001);
+  var dPxXRaw = Math.abs(dtxRaw) * s2;
+  var dPxYRaw = Math.abs(dtyRaw) * s2;
+
+  // Convergence: only when camera AND smoothed have both reached the
+  // raw target. Stopping early would leave a stale smoothed target
+  // around for the next setStreamCameraTarget call to resume from.
+  var dsSmooth = t.scale - streamCamSmoothScale;
+  var dPxXSmooth = Math.abs(t.tx - streamCamSmoothTx) * s2;
+  var dPxYSmooth = Math.abs(t.ty - streamCamSmoothTy) * s2;
+
+  if (Math.abs(dsRaw) < 0.0008 && dPxXRaw < 0.4 && dPxYRaw < 0.4 &&
+      Math.abs(dsSmooth) < 0.0008 && dPxXSmooth < 0.4 && dPxYSmooth < 0.4)
+  {
+    // Snap everything to target and stop.
+    streamCamSmoothScale = t.scale;
+    streamCamSmoothTx = t.tx;
+    streamCamSmoothTy = t.ty;
+    writeSvgTransform(t.graph, t.scale, t.tx, t.ty);
+    streamCamTarget = null;
+    streamCamTickActive = false;
+    return;
+  }
+
+  var kC = STREAM_LERP_FACTOR;
+  writeSvgTransform(
+    t.graph,
+    viewTransform.scale + (streamCamSmoothScale - viewTransform.scale) * kC,
+    viewTransform.tx + (streamCamSmoothTx - viewTransform.tx) * kC,
+    viewTransform.ty + (streamCamSmoothTy - viewTransform.ty) * kC);
+
+  streamCamTickActive = false;
+  streamCamRaf = requestAnimationFrame(streamCamTick);
+}
+
+function cancelStreamCameraSpring()
+{
+  if (streamCamTickActive) return;
+  if (streamCamRaf != 0)
+  {
+    cancelAnimationFrame(streamCamRaf);
+    streamCamRaf = 0;
+  }
+  streamCamTarget = null;
+  streamCamSmoothScale = null;
+  streamCamSmoothTx = 0;
+  streamCamSmoothTy = 0;
 }
 
 /**
@@ -2751,55 +3092,31 @@ function streamFollowNewCells(graph, immediate, skipResize)
     targetTy -= (STREAM_BOTTOM_GUTTER / 2) / targetScale;
   }
 
-  var nCells = 0;
-  for (var _id in model.cells) { if (_id !== '0' && _id !== '1') nCells++; }
-
-  try
-  {
-    console.log(
-      '[drawio][stream-cam]' +
-      ' immediate=' + !!immediate +
-      ' nCells=' + nCells +
-      ' recent=' + recentIds.length +
-      ' batch=' + lastBatchSize +
-      ' pullback=' + batchPullBack.toFixed(3) +
-      ' maxH=' + Math.round(maxH) +
-      ' desiredH=' + Math.round(desiredH) +
-      ' cont=' + Math.round(cw) + 'x' + Math.round(ch) +
-      ' whole=' + Math.round(wholeW) + 'x' + Math.round(wholeH) +
-      ' focus=' + Math.round(fw) + 'x' + Math.round(fh) +
-      ' fitWholeS=' + fitWholeS.toFixed(3) +
-      ' tgtS=' + targetScale.toFixed(3) +
-      ' tgtTx=' + Math.round(targetTx) +
-      ' tgtTy=' + Math.round(targetTy) +
-      ' cur(s,tx,ty)=(' + viewTransform.scale.toFixed(3) +
-        ',' + Math.round(viewTransform.tx) +
-        ',' + Math.round(viewTransform.ty) + ')'
-    );
-  }
-  catch (_) {}
-
   // Skip when the target equals the current transform. CRITICAL for
-  // smoothness: applies to BOTH eased and immediate calls. If we
-  // skipped only on !immediate, an immediate=true call (e.g. window
-  // resize firing as our notifySize grows the iframe) would re-set
-  // "transition: none" on the SVG mid-flight and abort the 320 ms
-  // ease that the prior partial just kicked off. Skipping when
-  // nothing changed leaves the in-flight transition undisturbed.
+  // smoothness: applies to BOTH eased and immediate calls. Skipping
+  // when nothing changed leaves the in-flight spring undisturbed.
   var dS = Math.abs(viewTransform.scale - targetScale);
   var dTx = Math.abs(viewTransform.tx - targetTx) * targetScale;
   var dTy = Math.abs(viewTransform.ty - targetTy) * targetScale;
   if (dS < 0.003 && dTx < 1.5 && dTy < 1.5)
   {
-    try { console.log('[drawio][stream-cam] skip-noop immediate=' + !!immediate + ' dS=' + dS.toFixed(4) + ' dTx=' + dTx.toFixed(2) + ' dTy=' + dTy.toFixed(2)); } catch (_) {}
     return;
   }
 
-  var dur = computeTransitionDuration(
-    viewTransform.scale, viewTransform.tx, viewTransform.ty,
-    targetScale, targetTx, targetTy,
-    Math.max(cw, ch));
-  applyViewTransform(graph, targetScale, targetTx, targetTy, immediate, dur);
+  if (immediate)
+  {
+    // Snap-fits, drag, fit-button, resize handlers — apply directly.
+    // applyViewTransform will cancel any in-flight streaming spring.
+    applyViewTransform(graph, targetScale, targetTx, targetTy, true, 0);
+  }
+  else
+  {
+    // Smooth streaming follow: hand off to the rAF spring so the
+    // camera lerps continuously toward the latest target. New
+    // partials updating the target mid-flight produce one connected
+    // motion instead of repeatedly restarting CSS transitions.
+    setStreamCameraTarget(graph, targetScale, targetTx, targetTy);
+  }
 }
 
 
@@ -2853,6 +3170,7 @@ function endStreaming()
   viewTransformSvg = null;
   lastFinalizedKey = null;
   cancelZoomAnim();
+  cancelStreamCameraSpring();
 }
 
 // --- Custom viewer: finalize from stream + interactivity ---
@@ -4112,8 +4430,13 @@ app.ontoolinputpartial = function(params)
       streamPendingEdges = streamMergeXmlDelta(streamGraph, streamPendingEdges, xmlNode);
       var newIds = findNewCellIds(streamGraph.getModel(), prevIds);
 
-      var topNew = filterTopLevelCellIds(streamGraph, newIds);
-      trackRecentCells(filterVertexCellIds(streamGraph, topNew));
+      // Focus tracker uses ALL new IDs, not just top-level. Cells nested
+      // inside a swimlane / group container would be excluded by
+      // filterTopLevelCellIds (their parent is the container, not '1'),
+      // so the camera couldn't follow content being added inside the
+      // container. The container itself is filtered out by isContainerVertex
+      // inside trackPartialFocus.
+      trackPartialFocus(streamGraph, newIds);
 
       if (newIds.length > 0)
       {
@@ -4131,8 +4454,7 @@ app.ontoolinputpartial = function(params)
       streamPendingEdges = streamMergeXmlDelta(streamGraph, streamPendingEdges, xmlNode);
       var newIds = findNewCellIds(streamGraph.getModel(), prevIds);
 
-      var topNew2 = filterTopLevelCellIds(streamGraph, newIds);
-      trackRecentCells(filterVertexCellIds(streamGraph, topNew2));
+      trackPartialFocus(streamGraph, newIds);
 
       if (newIds.length > 0)
       {
