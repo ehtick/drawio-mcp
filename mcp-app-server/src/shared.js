@@ -1343,7 +1343,7 @@ function normalizeEdgesToRounded(graph)
 
 }
 
-function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart)
+function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart, awaitBeforeMorph)
 {
   // Backwards-compatible arg shuffle: allow applyPostLayout(graph, alg, cb).
   if (typeof hints === 'function')
@@ -1473,8 +1473,14 @@ function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart)
     }
   }
 
-  new ELK().layout(elkGraph).then(function(result)
+  // Run ELK and the pre-morph wait in parallel — the morph starts as
+  // soon as both have completed. ELK is the variable cost (100–500 ms
+  // for big diagrams); awaitBeforeMorph lets the caller hold the morph
+  // until pending pop-in animations settle, so mxMorphing snapshots a
+  // fully-opaque view. Without overlap, ELK and animation time would add.
+  Promise.all([new ELK().layout(elkGraph), awaitBeforeMorph || Promise.resolve()]).then(function(values)
   {
+    var result = values[0];
     model.beginUpdate();
 
     var committed = false;
@@ -2071,6 +2077,11 @@ var animBatchStartT = 0;
 var deferredAnimCellIds = [];
 var deferredAnimTimer = null;
 var animatedCellIds = {};
+// Absolute timestamp when the most-recently-flushed batch's pop-in
+// animations are fully settled (opacity has reached 1 on every cell).
+// waitForPendingAnimationsToSettle uses this to gate mxMorphing so it
+// doesn't snapshot a half-faded view.
+var lastAnimEndT = 0;
 
 // Morph animation: when a re-parsed mermaid (or XML) delta moves an
 // existing cell to a new position, we GPU-animate the visual offset
@@ -2219,6 +2230,26 @@ function flushCellAnimations(graph)
 
   var schedule = computeAnimSchedule(readyVertices, readyEdges);
 
+  // Track when this batch's animations will be fully settled, so the
+  // postLayout morph can wait for opacity to reach 1 before snapshotting.
+  // Vertex pop-in is 400 ms; edge pen-draw is 500 ms; edge label fade is
+  // an additional 0.4 s offset + 0.3 s duration after the edge.
+  var maxEndMs = 0;
+  for (var v2 = 0; v2 < readyVertices.length; v2++)
+  {
+    var vEnd = (schedule.vertexDelay[readyVertices[v2].id] || 0) + 400;
+    if (vEnd > maxEndMs) maxEndMs = vEnd;
+  }
+  for (var e3 = 0; e3 < readyEdges.length; e3++)
+  {
+    var eEnd = (schedule.edgeDelay[readyEdges[e3].id] || 0) + 700;
+    if (eEnd > maxEndMs) maxEndMs = eEnd;
+  }
+  var nowFlush = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now() : Date.now();
+  var batchEndT = nowFlush + maxEndMs;
+  if (batchEndT > lastAnimEndT) lastAnimEndT = batchEndT;
+
   // Vertices: pop-scale + fade keyed by topological level.
   for (var v = 0; v < readyVertices.length; v++)
   {
@@ -2254,6 +2285,55 @@ function flushCellAnimations(graph)
       fadeInWithDelay(es.text.node, eDelaySec + 0.4);
     }
   }
+}
+
+/**
+ * Resolve once any queued / in-flight pop-in animations have fully
+ * settled (opacity has reached 1 on every cell). Used by the postLayout
+ * path to gate mxMorphing without imposing a fixed delay — short
+ * animations don't have to wait, deep diagrams get exactly as long as
+ * they need. Has a 2.5 s safety cap so a stuck deferred queue can't
+ * deadlock the morph.
+ */
+function waitForPendingAnimationsToSettle()
+{
+  return new Promise(function(resolve)
+  {
+    var nowFn = function()
+    {
+      return (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+    };
+    var deadline = nowFn() + 2500;
+
+    var check = function()
+    {
+      var now = nowFn();
+      if (now > deadline) { resolve(); return; }
+
+      // Still cells queued or a debounce timer pending — come back
+      // shortly. queueCellAnimation will eventually flush and update
+      // lastAnimEndT, at which point the next branch handles waiting
+      // for the in-flight transitions to complete.
+      if (pendingAnimCellIds.length > 0 || animDebounceTimer != null)
+      {
+        setTimeout(check, 30);
+        return;
+      }
+
+      var remaining = lastAnimEndT - now;
+      if (remaining > 0)
+      {
+        setTimeout(resolve, remaining);
+      }
+      else
+      {
+        resolve();
+      }
+    };
+
+    check();
+  });
 }
 
 // --- Topological animation scheduling ---
@@ -3439,6 +3519,7 @@ function endStreaming()
   pendingAnimCellIds = [];
   deferredAnimCellIds = [];
   animatedCellIds = {};
+  lastAnimEndT = 0;
 
   if (deferredAnimTimer != null)
   {
@@ -3639,52 +3720,53 @@ function finalizeStreamingView(xml, opts)
   }
 
   // Post-layout: morph cells from current positions to ELK output.
-  // Delay so the pending pop animations finish first; otherwise
-  // mxMorphing snapshots a half-faded view. The camera animation is
-  // started via onMorphStart so it runs in parallel with the morph,
-  // landing on fit-whole-of-new-positions just as the cells settle.
+  // Kick off ELK immediately and let it run in parallel with the tail
+  // of the pop-in animations. applyPostLayout holds the morph until
+  // both have completed, so mxMorphing snapshots a fully-opaque view
+  // without imposing a fixed delay (which under-shot deep diagrams and
+  // over-shot shallow ones). The camera animation is started via
+  // onMorphStart so it runs in parallel with the morph, landing on
+  // fit-whole-of-new-positions just as the cells settle.
   if (opts.postLayout)
   {
     var hints = { startNodeIds: opts.startNodeIds || null, endNodeIds: opts.endNodeIds || null };
+    var awaitAnims = waitForPendingAnimationsToSettle();
 
-    setTimeout(function()
+    try
     {
-      try
+      applyPostLayout(streamGraph, opts.postLayout, hints, function(applied)
       {
-        applyPostLayout(streamGraph, opts.postLayout, hints, function(applied)
-        {
-          if (!applied) return;
+        if (!applied) return;
 
-          try
-          {
-            var newXml = serializeGraphXml(streamGraph);
-            if (newXml != null)
-            {
-              currentXml = newXml;
-              drawioEditUrl = generateDrawioEditUrl(newXml);
-            }
-          }
-          catch (_) {}
-        }, function()
+        try
         {
-          // Morph is about to start. Cells are at their new positions
-          // in the model (visual still at old positions); start camera
-          // anim now so it lands in sync with the cell morph.
-          recentVertexQueue = [];
-          lastBatchSize = 0;
-          // Resize container for the new bbox first so fit-whole math
-          // is computed against the final container size.
-          resizeContainerToFit();
-          var t = computeFitWholeTransform();
-          if (t != null)
+          var newXml = serializeGraphXml(streamGraph);
+          if (newXml != null)
           {
-            // Match mxMorphing duration (12 steps × 30 ms = 360 ms).
-            animateCameraTo(t.s, t.tx, t.ty, 360, easeInOutCubic);
+            currentXml = newXml;
+            drawioEditUrl = generateDrawioEditUrl(newXml);
           }
-        });
-      }
-      catch (e) {}
-    }, 700);
+        }
+        catch (_) {}
+      }, function()
+      {
+        // Morph is about to start. Cells are at their new positions
+        // in the model (visual still at old positions); start camera
+        // anim now so it lands in sync with the cell morph.
+        recentVertexQueue = [];
+        lastBatchSize = 0;
+        // Resize container for the new bbox first so fit-whole math
+        // is computed against the final container size.
+        resizeContainerToFit();
+        var t = computeFitWholeTransform();
+        if (t != null)
+        {
+          // Match mxMorphing duration (12 steps × 30 ms = 360 ms).
+          animateCameraTo(t.s, t.tx, t.ty, 360, easeInOutCubic);
+        }
+      }, awaitAnims);
+    }
+    catch (e) {}
   }
 
   notifySize('finalize');
