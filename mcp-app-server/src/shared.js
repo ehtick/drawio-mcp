@@ -44,6 +44,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
   var viewerJs = (options && options.viewerJs) || null;
   var elkJs = (options && options.elkJs) || null;
   var mxElkLayoutJs = (options && options.mxElkLayoutJs) || null;
+  var buildVersion = (options && options.buildVersion) || ('drawio-mcp-' + new Date().toISOString());
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -278,6 +279,9 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
         color: var(--color-text-primary, #1a1a1a);
       }
     </style>
+    <script>
+      window.__DRAWIO_BUILD = ${JSON.stringify(buildVersion)};
+    </script>
   </head>
   <body>
     <div id="loading"><div class="spinner"></div>Creating diagram...</div>
@@ -594,7 +598,6 @@ function trackPartialFocus(graph, topNewIds)
 {
   if (graph == null || topNewIds == null || topNewIds.length === 0)
   {
-    try { console.log('[drawio][partial] empty topNew — skip focus update'); } catch (_) {}
     return;
   }
 
@@ -648,22 +651,6 @@ function trackPartialFocus(graph, topNewIds)
     return cc != null && !isContainerVertex(cc);
   });
 
-  var hasEdge = edgeCount > 0;
-  var mode = hasEdge ? 'REPLACE' : 'APPEND';
-
-  try
-  {
-    console.log('[drawio][partial] vCount=' + vertexCount +
-      ' eCount=' + edgeCount +
-      ' container=' + containerCount +
-      ' other=' + otherCount +
-      ' vIds=[' + newVertexIds.join(',') + ']' +
-      ' eIds=[' + newEdgeIds.join(',') + ']' +
-      ' containerIds=[' + containerIds.join(',') + ']' +
-      ' expanded=[' + ids.join(',') + ']' +
-      ' mode=' + mode);
-  }
-  catch (_) {}
 
   if (ids.length === 0)
   {
@@ -1084,20 +1071,11 @@ app.onhostcontextchanged = function()
   applyDisplayModeLayout();
 };
 
-function showError(message, err)
+function showError(message)
 {
   loadingEl.style.display = "none";
   errorEl.style.display = "block";
   errorEl.textContent = message;
-
-  // Also surface to the iframe's devtools console with a stack trace,
-  // so bugs that manifest as a red box in the viewer are diagnosable
-  // without instrumenting every catch block by hand.
-  if (typeof console !== 'undefined' && console.error)
-  {
-    var stack = (err && err.stack) ? err.stack : new Error(message).stack;
-    console.error('[drawio][viewer] ' + message + '\\n' + stack);
-  }
 }
 
 function waitForGraphViewer()
@@ -1363,7 +1341,6 @@ function normalizeEdgesToRounded(graph)
     }
   }
 
-  try { console.log('[drawio][postlayout] normalized ' + changed + ' edges to rounded'); } catch (_) {}
 }
 
 function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart)
@@ -2712,7 +2689,6 @@ function trackRecentCells(ids)
 
   lastBatchSize = ids.length;
 
-  try { console.log('[drawio][track] +' + ids.length + ' queue=' + recentVertexQueue.length + ' ids=' + ids.join(',')); } catch (_) {}
 }
 
 /**
@@ -2728,7 +2704,6 @@ function replaceRecentCells(ids)
   if (ids == null || ids.length === 0)
   {
     lastBatchSize = 0;
-    try { console.log('[drawio][track] replace cleared'); } catch (_) {}
     return;
   }
   trackRecentCells(ids);
@@ -2837,7 +2812,6 @@ function applyViewTransform(graph, scale, tx, ty, immediate, durationMs)
 
   if (graph == null || graph.container == null)
   {
-    try { console.log('[drawio][apply-vt] abort: no graph/container'); } catch (_) {}
     return;
   }
 
@@ -2852,7 +2826,6 @@ function applyViewTransform(graph, scale, tx, ty, immediate, durationMs)
   }
   if (svg == null)
   {
-    try { console.log('[drawio][apply-vt] abort: no svg in container'); } catch (_) {}
     return;
   }
 
@@ -3045,14 +3018,14 @@ function cancelStreamCameraSpring()
  */
 function streamFollowNewCells(graph, immediate, skipResize)
 {
-  if (graph == null) { try { console.log('[drawio][stream-cam] abort: no graph'); } catch (_) {} return; }
+  if (graph == null) return;
 
   var model = graph.getModel();
   var wholeBBox = computeWholeBBox(model);
-  if (wholeBBox == null) { try { console.log('[drawio][stream-cam] abort: no whole bbox'); } catch (_) {} return; }
+  if (wholeBBox == null) return;
 
   var cw = containerEl.clientWidth;
-  if (cw <= 0) { try { console.log('[drawio][stream-cam] abort: cw=' + cw); } catch (_) {} return; }
+  if (cw <= 0) return;
 
   var wholeW = Math.max(wholeBBox.maxX - wholeBBox.minX, 1);
   var wholeH = Math.max(wholeBBox.maxY - wholeBBox.minY, 1);
@@ -3290,7 +3263,6 @@ function finalizeStreamingView(xml, opts)
   var key = (xml || '') + '|' + (opts.postLayout || '') + '|' + (opts.replaceMode ? 'r' : '');
   if (key === lastFinalizedKey)
   {
-    try { console.log('[drawio][finalize] dedupe — same xml/opts as previous finalize, skipping'); } catch (_) {}
     return;
   }
   lastFinalizedKey = key;
@@ -3317,14 +3289,7 @@ function finalizeStreamingView(xml, opts)
       if (opts.replaceMode)
       {
         var keepIds = collectCellIdsFromXml(doc.documentElement);
-        var beforeCount = Object.keys(getModelCellIds(streamGraph.getModel())).length;
         removeOrphanCells(streamGraph, keepIds);
-        var afterCount = Object.keys(getModelCellIds(streamGraph.getModel())).length;
-        try { console.log('[drawio][finalize-merge] replaceMode keep=' + Object.keys(keepIds).length + ' before=' + beforeCount + ' after=' + afterCount + ' removed=' + (beforeCount - afterCount) + ' newIds=' + newIds.length); } catch (_) {}
-      }
-      else
-      {
-        try { console.log('[drawio][finalize-merge] no replaceMode newIds=' + newIds.length + ' total=' + Object.keys(getModelCellIds(streamGraph.getModel())).length); } catch (_) {}
       }
 
       if (newIds.length > 0)
@@ -3335,7 +3300,7 @@ function finalizeStreamingView(xml, opts)
   }
   catch (e)
   {
-    showError("Failed to render diagram: " + e.message, e);
+    showError("Failed to render diagram: " + e.message);
     return;
   }
 
@@ -3404,13 +3369,11 @@ function finalizeStreamingView(xml, opts)
   // If postLayout is set, SKIP this fit — the layout step below will
   // run its own combined camera + morph animation and we don't want
   // two competing camera moves.
-  try { console.log('[drawio][finalize] camera-settle requested replaceMode=' + !!opts.replaceMode + ' postLayout=' + (opts.postLayout || 'none')); } catch (_) {}
   if (!opts.postLayout)
   {
     requestAnimationFrame(function()
     {
       if (streamGraph == null) return;
-      try { console.log('[drawio][finalize] camera-settle: clearing queue (was=' + recentVertexQueue.length + ')'); } catch (_) {}
       recentVertexQueue = [];
       lastBatchSize = 0;
       // Resize container to its natural-fit height (no camera move),
@@ -3459,7 +3422,6 @@ function finalizeStreamingView(xml, opts)
           // Morph is about to start. Cells are at their new positions
           // in the model (visual still at old positions); start camera
           // anim now so it lands in sync with the cell morph.
-          try { console.log('[drawio][postlayout-settle] starting parallel camera anim'); } catch (_) {}
           recentVertexQueue = [];
           lastBatchSize = 0;
           // Resize container for the new bbox first so fit-whole math
@@ -3473,13 +3435,7 @@ function finalizeStreamingView(xml, opts)
           }
         });
       }
-      catch (e)
-      {
-        if (typeof console !== 'undefined' && console.warn)
-        {
-          console.warn('[drawio][post-layout] error:', e);
-        }
-      }
+      catch (e) {}
     }, 700);
   }
 
@@ -3800,7 +3756,6 @@ function animateCameraTo(toS, toTx, toTy, dur, easing)
        Math.abs(visible.tx - viewTransform.tx) * visible.scale > 1.5 ||
        Math.abs(visible.ty - viewTransform.ty) * visible.scale > 1.5))
   {
-    try { console.log('[drawio][cam-anim] cancel in-flight transition + lock visible: visible(s,tx,ty)=(' + visible.scale.toFixed(3) + ',' + Math.round(visible.tx) + ',' + Math.round(visible.ty) + ') vt=(' + viewTransform.scale.toFixed(3) + ',' + Math.round(viewTransform.tx) + ',' + Math.round(viewTransform.ty) + ')'); } catch (_) {}
     svg.style.transition = 'none';
     svg.style.transform =
       'scale(' + visible.scale + ') ' +
@@ -4207,7 +4162,6 @@ function applyLayoutChange(targetState)
 function customFitView()
 {
   if (streamGraph == null) return;
-  try { console.log('[drawio][fit-btn] clearing queue (was=' + recentVertexQueue.length + ')'); } catch (_) {}
   recentVertexQueue = [];
   lastBatchSize = 0;
   // Any fit-to-whole resets the dblclick toggle so the next double
@@ -4440,8 +4394,6 @@ app.ontoolinputpartial = function(params)
           isFlowchart: isMermaidFlowchart(partialMermaid),
           isHorizontal: isMermaidHorizontalFlowchart(partialMermaid)
         };
-
-        try { console.log('[drawio][stream] mermaid string closed (sibling key in partial) — firing early finalize'); } catch (_) {}
 
         waitForGraphViewer()
           .then(function() { return convertMermaidToXml(partialMermaid); })

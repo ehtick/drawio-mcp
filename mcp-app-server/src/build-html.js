@@ -85,8 +85,13 @@ const faviconPath = path.join(__dirname, "..", "favicon.png");
 const faviconBase64 = fs.readFileSync(faviconPath).toString("base64");
 console.log(`Favicon: ${faviconPath} (${(faviconBase64.length / 1024).toFixed(1)} KB base64)`);
 
-// Build the HTML and write it as an ES module export
-const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { elkJs, mxElkLayoutJs });
+// Build the HTML and write it as an ES module export. The build
+// version timestamp is captured at build time and baked into the HTML
+// so the iframe can log it on startup — used to confirm a fresh
+// bundle is running after a redeploy.
+const buildVersion = "drawio-mcp-" + new Date().toISOString();
+console.log(`Build version: ${buildVersion}`);
+const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { elkJs, mxElkLayoutJs, buildVersion });
 const outPath = path.join(__dirname, "generated-html.js");
 
 fs.writeFileSync(outPath,

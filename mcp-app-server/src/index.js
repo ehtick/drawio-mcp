@@ -102,8 +102,10 @@ if (fs.existsSync(shapeIndexPath))
   console.log("Shape index: " + shapeIndex.length + " shapes");
 }
 
-// Pre-build the HTML once
-const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { viewerJs, elkJs, mxElkLayoutJs });
+// Pre-build the HTML once. The build version timestamp is baked into
+// the HTML so the iframe can log it on startup (visible in DevTools).
+const buildVersion = "drawio-mcp-" + new Date().toISOString();
+const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { viewerJs, elkJs, mxElkLayoutJs, buildVersion });
 
 // --- Transport setup ---
 
