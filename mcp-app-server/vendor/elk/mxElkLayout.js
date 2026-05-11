@@ -139,6 +139,27 @@ mxElkLayout.prototype.buildElkGraph = function(parent)
 	var rawMap = {};
 	for (var k in origMap) rawMap[_stripPrefix(k)] = origMap[k];
 
+	// For the `layered` algorithm, apply mermaid-elk's hierarchyHandling
+	// policy — the same pass drawio-dev's ElkLayout facade runs by default.
+	// On a flat mermaid flowchart it does only two things:
+	//   1. drops elk.layered.crossingMinimization.forceNodeModelOrder and
+	//      elk.layered.considerModelOrder.strategy at the root so
+	//      crossing-minimization is free to pick a "natural" within-layer
+	//      ordering instead of preserving mermaid's declaration order
+	//      (which causes mirrored or top-stacked layouts for flowcharts
+	//      with multiple branches off decision diamonds);
+	//   2. sets spacing.baseValue=35 + elk.layered.unnecessaryBendpoints=true.
+	// On compound graphs it additionally flips per-subgraph hierarchyHandling
+	// to SEPARATE_CHILDREN by default and walks the LCA of each cross-
+	// boundary edge to flip ancestors back to INCLUDE_CHILDREN — a no-op for
+	// drawio-mcp today since mermaid flowcharts are flat, but harmless if
+	// compound diagrams start showing up here.
+	if (this.algorithm === 'layered' && typeof ElkLayout !== 'undefined'
+			&& typeof ElkLayout.applyMermaidElkPolicy === 'function')
+	{
+		ElkLayout.applyMermaidElkPolicy(elkGraph);
+	}
+
 	this._adapter = adapter;
 	this._elkToCellMap = rawMap;
 	this._portCells = adapter.getPortCells();
