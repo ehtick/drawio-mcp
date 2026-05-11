@@ -187,9 +187,21 @@ mxElkLayout.prototype.applyElkLayout = function(elkGraph)
 		this._portCells,
 		{
 			reversedEdges: this._reversedEdges,
-			// Preserve drawio-mcp's old behaviour: don't resize parents,
-			// don't try to be clever about edge styles. The applier writes
-			// waypoints + exit/entry styles, which is what shared.js wants.
+			// applyEdgeRouting=true makes the applier overwrite exitX/Y
+			// and entryX/Y on each edge with ELK's computed endpoint
+			// (snapped to the next waypoint so the first segment stays
+			// orthogonal). Without it, mermaid's pre-set fractional values
+			// (e.g. exitX=0.69) survive and drawio's orthogonal router
+			// produces visibly off-axis terminals.
+			//
+			// resetEdgePoints=true clears any stale mxPoint waypoints on
+			// the edge geometry before writing ELK's new bend points, so
+			// pre-existing routing from the mermaid import or a previous
+			// layout run doesn't leak through.
+			applyEdgeRouting: true,
+			resetEdgePoints: true,
+			// drawio-mcp doesn't grow compounds to fit children — the
+			// mermaid import already sized subgraph containers correctly.
 			resizeParent: false
 		});
 
