@@ -2769,10 +2769,13 @@ function parseTranslate(node)
 
 /**
  * For every edge whose source or target was morphed, hide the edge
- * group immediately and pen-draw it after the morph settles. Without
- * this the edge path is laid out from the NEW model terminal
- * positions while the vertex visually sits at its OLD position,
- * leaving a brief gap or dangling segment.
+ * group immediately and fade it back in after the morph settles.
+ * Without hiding, the edge path is laid out from the NEW model terminal
+ * positions while the vertex visually sits at its OLD position, leaving
+ * a brief gap or dangling segment. A full pen-draw was the original
+ * recovery, but Mermaid re-layouts shift many cells per partial and
+ * the repeated stroke-dashoffset wipes read as noisy; a quick opacity
+ * fade hides the disconnect just as well.
  */
 function hideAndRedrawEdgesForMorph(graph, morphedIdSet)
 {
@@ -2828,7 +2831,7 @@ function hideAndRedrawEdgesForMorph(graph, morphedIdSet)
 
   if (pendingShape.length === 0 && pendingText.length === 0) return;
 
-  // Pen-draw after the vertex morph has settled — the edge geometry
+  // Fade back in after the vertex morph has settled — the edge geometry
   // is already correct (laid out from the new terminal positions);
   // we just need it offscreen until the vertex visuals catch up.
   setTimeout(function()
@@ -2837,13 +2840,13 @@ function hideAndRedrawEdgesForMorph(graph, morphedIdSet)
     {
       var es = pendingShape[i];
       if (es.node.__edgeRedrawToken !== es.token) continue;
-      drawInEdgeNode(es.node, 0);
+      fadeInWithDelay(es.node, 0);
     }
     for (var j = 0; j < pendingText.length; j++)
     {
       var et = pendingText[j];
       if (et.node.__edgeRedrawToken !== et.token) continue;
-      fadeInWithDelay(et.node, 0.2);
+      fadeInWithDelay(et.node, 0);
     }
   }, MORPH_DURATION_MS);
 }
