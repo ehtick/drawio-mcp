@@ -6360,8 +6360,13 @@ export function createServer(html, options = {})
       // Mermaid path: return JSON for client-side conversion
       if (hasMermaid)
       {
+        var mermaidPayload = { mermaid: mermaid };
+        if (postLayout) mermaidPayload.postLayout = postLayout;
+        if (startNodeIds) mermaidPayload.startNodeIds = startNodeIds;
+        if (endNodeIds) mermaidPayload.endNodeIds = endNodeIds;
+        mermaidPayload._buildId = buildId;
         return {
-          content: [{ type: "text", text: JSON.stringify({ mermaid: mermaid, postLayout: postLayout || null, startNodeIds: startNodeIds || null, endNodeIds: endNodeIds || null, _buildId: buildId }) }],
+          content: [{ type: "text", text: JSON.stringify(mermaidPayload) }],
         };
       }
 
@@ -6377,8 +6382,14 @@ export function createServer(html, options = {})
         };
       }
 
+      var xmlPayload = { xml: normalizedXml };
+      if (postLayout) xmlPayload.postLayout = postLayout;
+      if (startNodeIds) xmlPayload.startNodeIds = startNodeIds;
+      if (endNodeIds) xmlPayload.endNodeIds = endNodeIds;
+      xmlPayload._buildId = buildId;
+
       var content = [
-        { type: "text", text: JSON.stringify({ xml: normalizedXml, postLayout: postLayout || null, startNodeIds: startNodeIds || null, endNodeIds: endNodeIds || null, _buildId: buildId }) }
+        { type: "text", text: JSON.stringify(xmlPayload) }
       ];
 
       // Validate and append warnings/errors so the LLM can self-correct
