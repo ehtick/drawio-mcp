@@ -1369,7 +1369,7 @@ function normalizeEdgesToRounded(graph)
 
 }
 
-function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart, awaitBeforeMorph)
+function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart, awaitBeforeMorph, fadeEdges)
 {
   // Backwards-compatible arg shuffle: allow applyPostLayout(graph, alg, cb).
   if (typeof hints === 'function')
@@ -1565,12 +1565,17 @@ function applyPostLayout(graph, algorithm, hints, onDone, onMorphStart, awaitBef
             refit();
             // After endUpdate the view re-renders edges with their new
             // waypoints/styles. Hide them synchronously so a paint
-            // can't sneak in showing stale-looking edges, then pen-draw
-            // them in the next frame using the streaming schedule.
+            // can't sneak in showing stale-looking edges, then animate
+            // them back in. The first post-stream layout pairs with
+            // vertex pop-in so we pen-draw along the BFS schedule;
+            // subsequent layout-button toggles fade everything in
+            // together — the topological wipe is too slow on a model
+            // whose vertices are just morphing positions.
             hideAllEdgesForMorph(graph);
             requestAnimationFrame(function()
             {
-              penDrawAllEdgesAfterMorph(graph);
+              if (fadeEdges) fadeInAllEdgesAfterMorph(graph);
+              else penDrawAllEdgesAfterMorph(graph);
             });
             notifySize('postLayout');
             try { containerEl.classList.remove('morph-active'); } catch (_) {}
@@ -2870,6 +2875,33 @@ function penDrawAllEdgesAfterMorph(graph)
     if (es.text != null && es.text.node != null)
     {
       fadeInWithDelay(es.text.node, eDelaySec + 0.4);
+    }
+  }
+}
+
+/**
+ * Simple fade-in for every edge. Used after the layout-button morph
+ * where the topological pen-draw "wipe" feels too slow — we just want
+ * the edges to reappear quickly once the vertices have settled.
+ */
+function fadeInAllEdgesAfterMorph(graph)
+{
+  if (graph == null) return;
+  graph.view.validate();
+  var model = graph.getModel();
+  for (var id in model.cells)
+  {
+    var cell = model.cells[id];
+    if (cell == null || !cell.edge) continue;
+    var state = graph.view.getState(cell);
+    if (state == null) continue;
+    if (state.shape != null && state.shape.node != null)
+    {
+      fadeInWithDelay(state.shape.node, 0);
+    }
+    if (state.text != null && state.text.node != null)
+    {
+      fadeInWithDelay(state.text.node, 0);
     }
   }
 }
@@ -4682,11 +4714,13 @@ function applyLayoutChange(targetState)
       {
         model.endUpdate();
         try { streamGraph.sizeDidChange(); } catch (_) {}
-        // Re-hide and pen-draw edges (same pattern as applyPostLayout).
+        // Re-hide and fade edges back in. The streaming-style
+        // topological pen-draw feels too slow here, so we just fade
+        // every edge in together once the vertex morph is done.
         hideAllEdgesForMorph(streamGraph);
         requestAnimationFrame(function()
         {
-          penDrawAllEdgesAfterMorph(streamGraph);
+          fadeInAllEdgesAfterMorph(streamGraph);
         });
         notifySize('layout-change');
         try { containerEl.classList.remove('morph-active'); } catch (_) {}
@@ -4770,7 +4804,9 @@ function applyLayoutChange(targetState)
         {
           animateCameraTo(t.s, t.tx, t.ty, 360, easeInOutCubic);
         }
-      });
+      },
+      undefined /* awaitBeforeMorph */,
+      true /* fadeEdges — button-driven re-layout uses fast fade */);
   }
   catch (e)
   {
