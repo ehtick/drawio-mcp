@@ -13,7 +13,13 @@ The MCP App server renders draw.io diagrams **inline** in AI chat interfaces usi
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `xml` | string | Yes | draw.io XML in mxGraphModel format |
+| `xml` | string | One of `xml` / `mermaid` | draw.io XML in mxGraphModel format. Mutually exclusive with `mermaid`. |
+| `mermaid` | string | One of `xml` / `mermaid` | Mermaid.js diagram definition (26 supported diagram types — flowchart, sequence, class, state, ER, gantt, mindmap, timeline, quadrant, C4, architecture, …). Parsed and laid out natively, then converted to draw.io. Mutually exclusive with `xml`. |
+| `postLayout` | enum | No | Optional ELK layout pass applied after render. One of `"verticalFlow"`, `"horizontalFlow"`, `"tree"`, `"force"`, `"stress"`, `"radial"`. Vertex positions are replaced; only edge topology survives. |
+| `startNodeIds` | string[] | Required with `verticalFlow` / `horizontalFlow` | Cell IDs pinned to the first layer (top / left). |
+| `endNodeIds` | string[] | Required with `verticalFlow` / `horizontalFlow` | Cell IDs pinned to the last layer (bottom / right). |
+
+Provide exactly one of `xml` or `mermaid` as a plain string — not an object or array.
 
 The rendered diagram includes:
 - Interactive zoom, pan, and navigation
