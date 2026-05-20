@@ -309,7 +309,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
         <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="6" x2="12" y2="18"/><line x1="6" y1="12" x2="18" y2="12"/></svg>
       </button>
       <button id="zoom-fit-btn" class="icon-only" style="display:none" title="Zoom in" aria-label="Zoom in">
-        <svg id="zoom-fit-icon-zoomin" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="15.5" y1="15.5" x2="20" y2="20"/></svg>
+        <svg id="zoom-fit-icon-zoomin" viewBox="0 0 24 24" aria-hidden="true"><text x="12" y="17" text-anchor="middle" font-family="-apple-system,system-ui,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="currentColor" stroke="none">1:1</text></svg>
         <svg id="zoom-fit-icon-fit" viewBox="0 0 24 24" aria-hidden="true" style="display:none"><polyline points="4 8 4 4 8 4"/><polyline points="16 4 20 4 20 8"/><polyline points="4 16 4 20 8 20"/><polyline points="16 20 20 20 20 16"/><rect x="8" y="9" width="8" height="6" rx="1"/></svg>
       </button>
       <button id="open-drawio" title="Open this diagram in draw.io to edit" aria-label="Open in draw.io">
@@ -4421,6 +4421,7 @@ function enableViewerInteractivity(graph)
 
       var c = clampPan(newScale, newTx, newTy);
       applyViewTransform(graph, newScale, c.tx, c.ty, true);
+      markUserZoomed();
     }
     else if (e.touches.length === 1
              && currentDisplayMode === 'fullscreen')
@@ -4510,6 +4511,19 @@ function customZoomAt(px, py, factor)
     px / newScale - gx,
     py / newScale - gy,
     true);
+  markUserZoomed();
+}
+
+// Flip the zoom-fit toggle to "fit" state. Called by every zoom path
+// EXCEPT the fit path itself, so any manual zoom (wheel, pinch,
+// toolbar +/-, dblclick zoom-in) leaves the button offering "Fit to
+// view" as the natural next action. Guarded so wheel-rate updates
+// don't churn the DOM.
+function markUserZoomed()
+{
+  if (dblclickZoomedIn) return;
+  dblclickZoomedIn = true;
+  updateZoomFitButtonUi();
 }
 
 /**
@@ -4721,6 +4735,7 @@ function customZoomToScaleAt(px, py, targetScale)
   // can't push the bbox so far off-screen there's no recovery.
   var c = clampPan(toS, toTx, toTy);
   animateCameraTo(toS, c.tx, c.ty, 320);
+  markUserZoomed();
 }
 
 /**
@@ -4829,21 +4844,15 @@ function fitToWidthScale()
 
 /**
  * Target scale for the "zoom in from fit" toggle (toolbar button and
- * dblclick when not zoomed in). Rules, keyed off the current fit-whole
- * scale (i.e. how zoomed-out the diagram is at fit):
- *   - fit-whole >= 100%: tiny diagram already at 100% — bump to 200%
- *     so the toggle isn't a visual no-op.
- *   - fit-whole > 60%: fit is already a comfortable read — jump to 100%.
- *   - fit-whole <= 60%: zoom in to at least 60%. Prefer fit-to-width
- *     when it's larger than 60%, so tall/narrow diagrams show their
- *     full horizontal extent without arbitrarily cropping the sides.
+ * dblclick when not zoomed in). Always 120% so the toggle is a
+ * meaningful close-up read; if fit-whole is already at or past 120%
+ * (tiny diagrams), bump to 200% so the toggle isn't a visual no-op.
  */
 function zoomInTargetScale()
 {
   var fitW = fitWholeScale();
-  if (fitW >= 0.999) return 2.0;
-  if (fitW > 0.6) return 1.0;
-  return Math.max(0.6, fitToWidthScale());
+  if (fitW >= 1.2) return 2.0;
+  return 1.2;
 }
 
 /**
@@ -5020,6 +5029,8 @@ function applyLayoutChange(targetState)
       // Parallel camera anim — same pattern as the postLayout finalize.
       recentVertexQueue = [];
       lastBatchSize = 0;
+      dblclickZoomedIn = false;
+      updateZoomFitButtonUi();
       resizeContainerToFit();
       var t = computeFitWholeTransform();
       if (t != null)
@@ -5079,6 +5090,8 @@ function applyLayoutChange(targetState)
         // onMorphStart: parallel camera anim.
         recentVertexQueue = [];
         lastBatchSize = 0;
+        dblclickZoomedIn = false;
+        updateZoomFitButtonUi();
         resizeContainerToFit();
         var t = computeFitWholeTransform();
         if (t != null)
