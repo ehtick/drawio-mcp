@@ -72,6 +72,53 @@ An alternative approach that works **without installing anything**. Add instruct
 
 ---
 
+## Data Residency & Offline Use
+
+If you're deploying in an environment with strict data restrictions, here is exactly
+where diagram data goes for each approach.
+
+**No component sends your diagram to a cloud rasterizer.** `convert.diagrams.net` (or
+any cloud export endpoint) is not called anywhere in this repository, and there is no
+"local dependency missing → fall back to cloud" path. PNG/SVG/PDF export happens only
+in the Skill + CLI, which shells out to your **locally installed draw.io Desktop CLI**
+(located via `which drawio`); if it isn't installed, the `.drawio` file is kept and
+nothing is sent.
+
+### Does your diagram leave the machine?
+
+| Approach | Diagram leaves the machine? |
+|---|---|
+| **MCP App Server — hosted (`mcp.draw.io`)** | **Yes** — it is sent to the draw.io server as the MCP request. Self-host instead (below) to keep it local. |
+| **MCP App Server — self-hosted** (local Node or your own Cloudflare) | No — processed by your server and embedded in HTML that renders client-side. |
+| **MCP Tool Server** (`@drawio/mcp`) | No — carried in the URL `#fragment`, which browsers do not transmit to the server. |
+| **Skill + CLI** | No — written locally and exported by your local draw.io Desktop CLI. |
+
+### Reducing external requests
+
+Even when the diagram itself stays local, the rendering loads draw.io's web-app /
+viewer **code** from `app.diagrams.net` and `viewer.diagrams.net` by default. These
+fetch application code and assets — not your diagram — but they are still outbound
+requests. To reduce or remove them:
+
+- **App Server:** build with the `VIEWER_PATH` environment variable to inline the
+  viewer instead of loading it from `viewer.diagrams.net`.
+- **Tool Server:** set the `DRAWIO_BASE_URL` environment variable to a self-hosted
+  draw.io instance.
+
+### Your LLM is a separate consideration
+
+The diagram is *generated* by the LLM. If you use a hosted model, the diagram content
+is produced in that provider's cloud regardless of where this MCP server runs.
+End-to-end isolation requires a locally hosted model as well.
+
+### Verifying
+
+The only reliable way to confirm a deployment makes **no** outbound calls is to run it
+with network egress blocked (or watch the browser's Network tab) and verify it still
+renders. We recommend this for any strict-isolation deployment.
+
+---
+
 ## XML Reference (Single Source of Truth)
 
 The draw.io XML generation reference — covering edge routing, containers, layers, tags, metadata, dark mode, style properties, and XML well-formedness — lives in a single canonical file:
