@@ -1173,6 +1173,64 @@ function waitForGraphViewer()
   });
 }
 
+// ─── Layout gate ─────────────────────────────────────────────────
+// The host may keep this iframe display:none while a tool result
+// streams in (or when revisiting an old message). Without layout every
+// DOM measurement reads 0x0, so a Mermaid parse done in that state
+// sizes all nodes to their shape minimum — and the conversion cache
+// would then serve that zero-sized parse as the final render. There is
+// also nothing to see while hidden (streaming animation included), so
+// all Mermaid parse/render work waits here until the document actually
+// has layout. drawio-mermaid additionally guards measureText against
+// degenerate 0x0 measurements as defense in depth.
+
+function isDocumentLaidOut()
+{
+  return document.documentElement != null &&
+    document.documentElement.clientWidth > 0;
+}
+
+var documentLaidOutPromise = null;
+
+function whenDocumentLaidOut()
+{
+  if (documentLaidOutPromise != null) return documentLaidOutPromise;
+
+  documentLaidOutPromise = new Promise(function(resolve)
+  {
+    if (isDocumentLaidOut()) { resolve(); return; }
+
+    var observer = null;
+    var timer = null;
+    var finish = function()
+    {
+      if (observer != null) { observer.disconnect(); observer = null; }
+      if (timer != null) { clearInterval(timer); timer = null; }
+      resolve();
+    };
+
+    // IntersectionObserver fires on visibility changes even while rAF
+    // is frozen in a hidden iframe; the interval is a fallback for
+    // embedders where the observer never fires.
+    try
+    {
+      observer = new IntersectionObserver(function()
+      {
+        if (isDocumentLaidOut()) finish();
+      });
+      observer.observe(document.documentElement);
+    }
+    catch (e) { /* fall back to polling below */ }
+
+    timer = setInterval(function()
+    {
+      if (isDocumentLaidOut()) finish();
+    }, 200);
+  });
+
+  return documentLaidOutPromise;
+}
+
 // Cache one (text, xml) pair so finalize doesn't re-parse the same
 // Mermaid text the streaming path already parsed. parseText is
 // expensive (50–300 ms for moderate diagrams) and the finalized text
@@ -1337,7 +1395,11 @@ function commitDiagramXml(xml)
 
     try
     {
-      out = mxMermaidToDrawio.wrapGroup(xml, wrapText, null);
+      // normalize: shift the wrapper's children so the padded
+      // transparentBounds group starts exactly at (0,0) — without it the
+      // padded bounds begin at (-groupPadding,-groupPadding) and draw.io
+      // extends the page above/left of the origin on "Open in draw.io".
+      out = mxMermaidToDrawio.wrapGroup(xml, wrapText, null, {normalize: true});
     }
     catch (e)
     {
@@ -1425,7 +1487,12 @@ function applyPostLayout(graph, algorithm, onDone, onMorphStart, awaitBeforeMorp
 
   // Canonical edge treatment (orthogonal + rounded), shared with the
   // editor's mermaid-edit post-pass and Arrange > Layout dialog default.
-  // resizeParent:false keeps the mermaid-sized group container intact.
+  // resizeParent:false pins the mermaid-measured node sizes — drawio-
+  // mermaid is the authority on sizing (its measureText falls back to a
+  // calibrated estimate when the iframe isn't rendered yet), and the
+  // bridge couples this flag to its vertex-label sizing so ELK lays out
+  // with the pinned sizes instead of reserving room for grown boxes it
+  // would never write back.
   var elkOptions = { mermaidPolicy: true, applierOptions: { resizeParent: false } };
   if (ElkLayout.CANONICAL_EDGE != null)
   {
@@ -5063,6 +5130,14 @@ function showMermaidTextPreview(partialMermaid)
  */
 function handleMermaidPartial(partialMermaid)
 {
+  // No layout → no visible animation, and DOM measurement reads 0x0
+  // (zero-sized nodes). Skip streaming previews entirely while hidden;
+  // the finalize paths gate on whenDocumentLaidOut() and parse the
+  // authoritative text with healthy measurement once the host shows
+  // the iframe. If the iframe becomes visible mid-stream, the next
+  // partial resumes the preview naturally.
+  if (!isDocumentLaidOut()) return;
+
   // Need the viewer + parser before we can render anything
   if (typeof Graph === 'undefined' || typeof mxUtils === 'undefined' ||
       typeof mxMermaidToDrawio === 'undefined' ||
@@ -5274,6 +5349,7 @@ app.ontoolinputpartial = function(params)
         };
 
         waitForGraphViewer()
+          .then(whenDocumentLaidOut)
           .then(function() { return convertMermaidToXml(partialMermaid); })
           .then(function(xml) { finalizeStreamingView(xml, earlyOpts); })
           .catch(function(_e)
@@ -5425,6 +5501,7 @@ app.ontoolinput = function(params)
     });
 
     waitForGraphViewer()
+      .then(whenDocumentLaidOut)
       .then(function() { return convertMermaidToXml(mermaidText); })
       .then(function(xml) { finalizeStreamingView(xml, mermaidOpts); })
       .catch(function(e)
@@ -5524,6 +5601,7 @@ app.ontoolresult = function(result)
       });
 
       waitForGraphViewer()
+        .then(whenDocumentLaidOut)
         .then(function() { return convertMermaidToXml(mermaidText); })
         .then(function(xml) { finalizeStreamingView(xml, mermaidOpts); })
         .catch(function(e)
