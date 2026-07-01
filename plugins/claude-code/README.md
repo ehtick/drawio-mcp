@@ -1,13 +1,13 @@
 # Draw.io Plugin for Claude Code
 
-A Claude Code plugin that generates native `.drawio` files, with optional export to PNG, SVG, or PDF (with embedded XML so the exported file remains editable in draw.io) or as a browser URL that opens the diagram directly in `app.diagrams.net`. No MCP setup required.
+A Claude Code plugin that generates native `.drawio` files. Claude authors each diagram as **Mermaid** (converted and laid out by the draw.io desktop CLI) or as **draw.io XML** directly — with optional **ELK auto-layout** for XML, export to PNG/SVG/PDF (with embedded XML so the file remains editable in draw.io), or a browser URL that opens the diagram directly in `app.diagrams.net`. No MCP setup required.
 
 ## How It Works
 
 When you ask Claude Code to create a diagram, it will:
 
-1. Generate draw.io XML for your requested diagram
-2. Write it to a `.drawio` file in your current directory
+1. Choose how to author it — **Mermaid** for standard types (flowchart, sequence, class, state, ER, gantt, mindmap…) when the desktop app is installed, or **draw.io XML** for custom styling, precise positioning, specific shape libraries, or when no desktop app is present
+2. Produce a native `.drawio` file — convert the Mermaid with the desktop CLI, or write the XML directly (optionally running an ELK `--layout` pass so you don't hand-place cells)
 3. Handle the requested output:
    - PNG / SVG / PDF — export using the draw.io desktop CLI
    - `url` — compress the XML with Node.js's built-in `zlib` and open `https://app.diagrams.net/#create=...` in your browser (keeps the `.drawio` file as a local copy)
@@ -17,7 +17,7 @@ When you ask Claude Code to create a diagram, it will:
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
-- [draw.io Desktop](https://github.com/jgraph/drawio-desktop/releases) installed (only required for PNG/SVG/PDF export — not needed for `.drawio` or `url` modes)
+- [draw.io Desktop](https://github.com/jgraph/drawio-desktop/releases) installed — required for Mermaid conversion, ELK layout, and PNG/SVG/PDF export. Not needed for plain XML `.drawio` or `url` output, which Claude can produce with no desktop app
 
 ## Installation
 
@@ -83,20 +83,21 @@ The `.drawio.*` double extension signals that the file contains embedded diagram
 
 `url` mode uses only Node.js's built-in `zlib` (deflate-raw compression) and `child_process` (browser open) — no external dependencies. The resulting `https://app.diagrams.net/#create=...` URL is the same format used by the [MCP Tool Server](../../mcp-tool-server/README.md), so behavior is identical.
 
-## XML Reference
+## References
 
-The skill references the shared XML generation guide (edge routing, containers, layers, tags, metadata, dark mode, etc.) from GitHub at runtime:
-[`shared/xml-reference.md`](../../shared/xml-reference.md)
+The skill fetches two shared guides from GitHub at runtime — the single source of truth for all draw.io MCP prompts across the repository. No extra files need to be copied during installation.
 
-This is the single source of truth for all draw.io MCP prompts across the repository. No extra files need to be copied during installation.
+- [`shared/xml-reference.md`](../../shared/xml-reference.md) — draw.io XML generation (edge routing, containers, layers, tags, metadata, dark mode, etc.), used when authoring XML
+- [`shared/mermaid-reference.md`](../../shared/mermaid-reference.md) — Mermaid syntax for all supported diagram types plus flowchart styling, used when authoring Mermaid
 
-## Why XML Only?
+## Authoring: Mermaid or XML?
 
-A `.drawio` file is just mxGraphModel XML. Mermaid and CSV formats require draw.io's server-side conversion — they can't be saved as native files. Claude generates XML directly for all diagram types, which means:
+A `.drawio` file is native mxGraphModel XML. Claude produces one two ways:
 
-- No server dependency
-- No conversion step
-- Files are immediately editable in draw.io
+- **Mermaid** — terse text that the desktop CLI converts to `.drawio` and lays out automatically. Preferred for standard diagram types when the desktop app is installed.
+- **XML** — generated directly, for custom styling, precise positioning, or specific shape libraries. Needs no desktop app, so it's the universal fallback (`.drawio` file or `url`).
+
+Both routes end up as the same native `.drawio` format, immediately editable in draw.io. Mermaid conversion and ELK layout run locally via the desktop CLI — there is no server dependency.
 
 ## Other Variants
 
