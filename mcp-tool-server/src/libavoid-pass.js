@@ -104,23 +104,35 @@ function num(v)
   return isNaN(n) ? 0 : n;
 }
 
-// Set edgeStyle/curved on an mxGraph style string, preserving every other key.
+// Apply the canonical libavoid edge style on an mxGraph style string, preserving
+// every other key (stroke, arrows, colors, …). libavoidRouting=1 keeps the edge
+// auto-routing via libavoid if the diagram is later opened and edited in the
+// draw.io editor; rounded/orthogonalLoop/jettySize match what the editor's
+// libavoid checkbox pairs with the flag.
 function setEdgeStyle(style)
 {
   var kept = [];
   var parts = (style || "").split(";");
+  var managed = {
+    edgeStyle: 1, rounded: 1, curved: 1,
+    libavoidRouting: 1, orthogonalLoop: 1, jettySize: 1, html: 1
+  };
 
   for (var i = 0; i < parts.length; i++)
   {
     var p = parts[i].trim();
     if (p === "") continue;
     var key = p.split("=")[0];
-    if (key === "edgeStyle" || key === "curved") continue;
+    if (managed[key]) continue;
     kept.push(p);
   }
 
   kept.push("edgeStyle=orthogonalEdgeStyle");
-  kept.push("curved=0");
+  kept.push("rounded=0");
+  kept.push("libavoidRouting=1");
+  kept.push("orthogonalLoop=1");
+  kept.push("jettySize=auto");
+  kept.push("html=1");
   return kept.join(";") + ";";
 }
 

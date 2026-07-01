@@ -1759,11 +1759,16 @@ function routeWithLibavoid(graph, Avoid)
   if (routedIds.length === 0) return false;
 
   // Write the routes back. We keep orthogonalEdgeStyle (libavoid is already
-  // orthogonal) so the segments stay draggable in the draw.io editor, and we
-  // leave the endpoints FLOATING — every route meets a shape at a side
-  // midpoint, which is where a floating orthogonal endpoint connects anyway,
-  // and floating endpoints re-route naturally if a shape is later moved. The
-  // helper's waypoints are absolute; convert to the edge's parent frame.
+  // orthogonal) so the segments stay draggable in the draw.io editor, and tag
+  // each edge with libavoidRouting=1 (plus the editor's paired rounded/
+  // orthogonalLoop/jettySize defaults) so that if the diagram is opened in the
+  // full editor and a shape is later moved, the edge re-routes live via libavoid
+  // instead of reverting to the basic router. The flag is inert in this inline
+  // viewer (no libavoid extension) — the baked waypoints render as-is, so there
+  // is no shift on open. We leave the endpoints FLOATING — every route meets a
+  // shape at a side midpoint, which is where a floating orthogonal endpoint
+  // connects anyway. The helper's waypoints are absolute; convert to the edge's
+  // parent frame.
   model.beginUpdate();
   try
   {
@@ -1786,7 +1791,12 @@ function routeWithLibavoid(graph, Avoid)
 
       var style = model.getStyle(edge) || '';
       style = mxUtils.setStyle(style, mxConstants.STYLE_EDGE, 'orthogonalEdgeStyle');
-      style = mxUtils.setStyle(style, 'curved', '0');
+      style = mxUtils.setStyle(style, 'rounded', '0');
+      style = mxUtils.setStyle(style, 'curved', null);
+      style = mxUtils.setStyle(style, 'libavoidRouting', '1');
+      style = mxUtils.setStyle(style, 'orthogonalLoop', '1');
+      style = mxUtils.setStyle(style, 'jettySize', 'auto');
+      style = mxUtils.setStyle(style, 'html', '1');
       model.setStyle(edge, style);
     }
   }
