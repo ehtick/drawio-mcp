@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pako from "pako";
 import { routeXml } from "./libavoid-pass.js";
-import { listPageMeta, readPageXml, writePageXml } from "./pages.js";
+import { assertPagePath, listPageMeta, readPageXml, writePageXml } from "./pages.js";
 import { spawn } from "child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
@@ -366,7 +366,7 @@ const tools =
         path:
         {
           type: "string",
-          description: "Absolute or relative path to the local .drawio file.",
+          description: "Absolute or relative path to the local file. Must end in .drawio or .xml.",
         },
       },
       required: ["path"],
@@ -377,7 +377,7 @@ const tools =
     description:
       "Reads one page (diagram) from a local .drawio file and returns its raw mxGraphModel " +
       "XML, decompressing it first if the file stores that page compressed. " +
-      "Use list_pages first to find the index or name of the page you need.",
+      "Use list_pages first to find the index, name, or id of the page you need.",
     inputSchema:
     {
       type: "object",
@@ -386,13 +386,13 @@ const tools =
         path:
         {
           type: "string",
-          description: "Absolute or relative path to the local .drawio file.",
+          description: "Absolute or relative path to the local file. Must end in .drawio or .xml.",
         },
         page:
         {
           type: "string",
           description:
-            "Which page to read: a zero-based page index (e.g. \"0\") or the page's exact name as shown by list_pages.",
+            "Which page to read: a zero-based page index (e.g. \"0\"), the page's exact name, or the page's id as shown by list_pages.",
         },
       },
       required: ["path", "page"],
@@ -413,18 +413,19 @@ const tools =
         path:
         {
           type: "string",
-          description: "Absolute or relative path to the local .drawio file.",
+          description: "Absolute or relative path to the local file. Must end in .drawio or .xml.",
         },
         page:
         {
           type: "string",
           description:
-            "Which page to replace: a zero-based page index (e.g. \"0\") or the page's exact name as shown by list_pages.",
+            "Which page to replace: a zero-based page index (e.g. \"0\"), the page's exact name, or the page's id as shown by list_pages.",
         },
         content:
         {
           type: "string",
-          description: "The new page content as plain mxGraphModel XML (uncompressed).",
+          description:
+            "The new page content as plain mxGraphModel XML (uncompressed). Must be a single <mxGraphModel> element without any <diagram> tags.",
         },
       },
       required: ["path", "page", "content"],
@@ -546,6 +547,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) =>
           isError: true,
         };
       }
+
+      // Restrict which local files the tools may touch before checking
+      // existence, so arbitrary paths aren't probed at all.
+      assertPagePath(filePath);
 
       if (!existsSync(filePath))
       {

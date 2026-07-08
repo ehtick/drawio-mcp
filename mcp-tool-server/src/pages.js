@@ -1,8 +1,22 @@
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, unlinkSync } from "fs";
 import pako from "pako";
 
 const DIAGRAM_RE = /<diagram\b([^>]*?)(?:\/>|>([\s\S]*?)<\/diagram>)/g;
 const ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"/g;
+
+// Cap on decompressed page size so a crafted deflate bomb in a local file
+// can't OOM the server process.
+const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
+
+export function assertPagePath(filePath)
+{
+  const lower = String(filePath).toLowerCase();
+
+  if (!lower.endsWith(".drawio") && !lower.endsWith(".xml"))
+  {
+    throw new Error(`Only .drawio and .xml files are supported: ${filePath}`);
+  }
+}
 
 function parseAttrs(rawAttrs)
 {
@@ -58,7 +72,35 @@ export function isLikelyCompressed(body)
   return trimmed.length > 0 && !trimmed.startsWith("<");
 }
 
-export function decompressDiagram(body)
+function inflateRawCapped(input, maxBytes)
+{
+  const inflator = new pako.Inflate({ raw: true });
+  const chunks = [];
+  let total = 0;
+
+  inflator.onData = function (chunk)
+  {
+    total += chunk.length;
+
+    if (total > maxBytes)
+    {
+      throw new Error(`decompressed page exceeds the ${maxBytes} byte limit`);
+    }
+
+    chunks.push(Buffer.from(chunk));
+  };
+
+  inflator.push(input, true);
+
+  if (inflator.err)
+  {
+    throw new Error(inflator.msg || "invalid compressed data");
+  }
+
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+export function decompressDiagram(body, maxBytes = MAX_INFLATED_BYTES)
 {
   const trimmed = body.trim();
 
@@ -69,7 +111,7 @@ export function decompressDiagram(body)
 
   try
   {
-    const inflated = pako.inflateRaw(Buffer.from(trimmed, "base64"), { to: "string" });
+    const inflated = inflateRawCapped(Buffer.from(trimmed, "base64"), maxBytes);
     return decodeURIComponent(inflated);
   }
   catch (e)
@@ -85,9 +127,9 @@ function compressDiagram(xml)
   return Buffer.from(compressed).toString("base64");
 }
 
-export function findPage(diagrams, indexOrName)
+export function findPage(diagrams, pageRef)
 {
-  const asString = String(indexOrName);
+  const asString = String(pageRef);
 
   if (/^\d+$/.test(asString))
   {
@@ -101,41 +143,69 @@ export function findPage(diagrams, indexOrName)
     return diagrams[idx];
   }
 
-  const matches = diagrams.filter(function (diagram)
+  let matches = diagrams.filter(function (diagram)
   {
     return diagram.attrs.name === asString;
   });
 
   if (matches.length === 0)
   {
+    matches = diagrams.filter(function (diagram)
+    {
+      return diagram.attrs.id === asString;
+    });
+  }
+
+  if (matches.length === 0)
+  {
     const names = diagrams.map(function (diagram) { return diagram.attrs.name; }).join(", ");
-    throw new Error(`No page named "${asString}" found. Available page names: ${names}`);
+    throw new Error(`No page with name or id "${asString}" found. Available page names: ${names}`);
   }
 
   if (matches.length > 1)
   {
     const indices = matches.map(function (diagram) { return diagram.index; }).join(", ");
-    throw new Error(`Multiple pages named "${asString}" found (indices: ${indices}). Use an index instead.`);
+    throw new Error(`Multiple pages named "${asString}" found (indices: ${indices}). Use an index or page id instead.`);
   }
 
   return matches[0];
 }
 
-export function readPageXml(filePath, indexOrName)
+function writeFileAtomic(filePath, data)
 {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+
+  try
+  {
+    writeFileSync(tmpPath, data, "utf8");
+    renameSync(tmpPath, filePath);
+  }
+  catch (e)
+  {
+    try { unlinkSync(tmpPath); } catch (e2) { /* ignore */ }
+    throw e;
+  }
+}
+
+export function readPageXml(filePath, pageRef)
+{
+  assertPagePath(filePath);
+
   const text = readFileSync(filePath, "utf8");
   const diagrams = parseDiagrams(text);
-  const page = findPage(diagrams, indexOrName);
+  const page = findPage(diagrams, pageRef);
   const xml = decompressDiagram(page.body);
 
   return { xml, index: page.index, id: page.attrs.id || null, name: page.attrs.name || null };
 }
 
-export function writePageXml(filePath, indexOrName, newXml)
+export function writePageXml(filePath, pageRef, newXml)
 {
+  assertPagePath(filePath);
+
   const text = readFileSync(filePath, "utf8");
   const diagrams = parseDiagrams(text);
-  const page = findPage(diagrams, indexOrName);
+  const page = findPage(diagrams, pageRef);
 
   const trimmedXml = newXml.trim();
 
@@ -144,18 +214,32 @@ export function writePageXml(filePath, indexOrName, newXml)
     throw new Error("set_page content must be plain <mxGraphModel> XML for a single page, not a full <mxfile> or non-XML content");
   }
 
+  // A raw <diagram> tag in the content would escape the target page's body
+  // and rewrite the file's page structure (escaped &lt;diagram&gt; is fine).
+  if (/<\/?diagram\b/i.test(trimmedXml))
+  {
+    throw new Error("set_page content must not contain <diagram> tags — pass the inner mxGraphModel XML of a single page");
+  }
+
   const compressed = isLikelyCompressed(page.body);
   const newBody = compressed ? compressDiagram(trimmedXml) : trimmedXml;
 
   const fullOriginal = text.slice(page.start, page.end);
-  const bodyStartOffset = fullOriginal.indexOf(">") + 1;
-  const bodyEndOffset = fullOriginal.lastIndexOf("</diagram>");
-  const openingTag = fullOriginal.slice(0, bodyStartOffset);
-  const closingTag = fullOriginal.slice(bodyEndOffset);
-  const replacement = openingTag + newBody + closingTag;
+  let replacement;
+
+  if (fullOriginal.endsWith("/>"))
+  {
+    replacement = `${fullOriginal.slice(0, -2)}>${newBody}</diagram>`;
+  }
+  else
+  {
+    const bodyStartOffset = fullOriginal.indexOf(">") + 1;
+    const bodyEndOffset = fullOriginal.lastIndexOf("</diagram>");
+    replacement = fullOriginal.slice(0, bodyStartOffset) + newBody + fullOriginal.slice(bodyEndOffset);
+  }
 
   const result = text.slice(0, page.start) + replacement + text.slice(page.end);
-  writeFileSync(filePath, result, "utf8");
+  writeFileAtomic(filePath, result);
 
   return { index: page.index, id: page.attrs.id || null, name: page.attrs.name || null, compressed };
 }
