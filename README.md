@@ -28,7 +28,7 @@ The official hosted endpoint is available at:
 https://mcp.draw.io/mcp
 ```
 
-Add this URL as a remote MCP server in Claude.ai, Cursor, or any MCP Apps-compatible host — no installation required. In Cursor, diagrams render inline in the Agent chat ([one-click install](https://cursor.com/en/install-mcp?name=drawio&config=eyJ1cmwiOiJodHRwczovL21jcC5kcmF3LmlvL21jcCJ9)).
+Add this URL as a remote MCP server in Claude.ai, Cursor, or any MCP Apps-compatible host — no installation required. In Cursor (≥ 2.6), diagrams render inline in the Agent chat ([one-click install](https://cursor.com/en/install-mcp?name=drawio&config=eyJ1cmwiOiJodHRwczovL21jcC5kcmF3LmlvL21jcCJ9)); on older builds, use the stdio [`@drawio/mcp`](mcp-tool-server/README.md) tool server instead.
 
 You can also run the server locally via Node.js or deploy your own instance to Cloudflare Workers.
 

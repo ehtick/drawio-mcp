@@ -40,7 +40,7 @@ Add this URL as a remote MCP server in Claude.ai, Cursor, or any MCP Apps-compat
 
 ### Using with Cursor
 
-Cursor supports the MCP Apps extension, so diagrams render inline in the Agent chat.
+Cursor supports the MCP Apps extension (Cursor **≥ 2.6**), so diagrams render inline in the Agent chat. On older builds the server still connects, but there's nothing to render inline; use the stdio [`@drawio/mcp`](../mcp-tool-server) tool server instead, which opens diagrams in the browser.
 
 [![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=drawio&config=eyJ1cmwiOiJodHRwczovL21jcC5kcmF3LmlvL21jcCJ9)
 
