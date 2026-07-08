@@ -4529,8 +4529,14 @@ function enableViewerInteractivity(graph)
   customViewerInteractive = true;
   containerEl.classList.add("custom-viewer");
 
-  var dragging = false, sx = 0, sy = 0, stx = 0, sty = 0, sscale = 1;
+  var dragging = false, dragMoved = false;
+  var sx = 0, sy = 0, stx = 0, sty = 0, sscale = 1;
   var lastClickT = 0, lastClickX = 0, lastClickY = 0;
+  // A press only becomes a pan after this much pointer travel.
+  // Cancelling the camera animation on the bare pointerdown froze an
+  // in-flight fit/zoom ease mid-flight, so a plain click during the
+  // Fit ease left the diagram at a half-way scale/offset.
+  var DRAG_START_THRESHOLD_PX = 4;
 
   containerEl.addEventListener('pointerdown', function(e)
   {
@@ -4577,13 +4583,11 @@ function enableViewerInteractivity(graph)
     lastClickY = e.clientY;
 
     dragging = true;
+    dragMoved = false;
     sx = e.clientX; sy = e.clientY;
-    // Sample current camera transform at drag start; pan rewrites
-    // tx/ty directly with immediate=true so there's no transition lag.
-    sscale = viewTransform.scale;
-    stx    = viewTransform.tx;
-    sty    = viewTransform.ty;
-    cancelZoomAnim();
+    // Camera sampling + animation cancel happen at the drag threshold
+    // in pointermove, so a press that never moves (a click) leaves an
+    // in-flight fit/zoom ease undisturbed.
     containerEl.classList.add('dragging');
     try { containerEl.setPointerCapture(e.pointerId); } catch(_) {}
   });
@@ -4591,6 +4595,28 @@ function enableViewerInteractivity(graph)
   containerEl.addEventListener('pointermove', function(e)
   {
     if (!dragging) return;
+    if (!dragMoved)
+    {
+      if (Math.abs(e.clientX - sx) < DRAG_START_THRESHOLD_PX &&
+          Math.abs(e.clientY - sy) < DRAG_START_THRESHOLD_PX)
+      {
+        return;
+      }
+      // Threshold crossed: this is a pan. Stop any camera animation
+      // and anchor the drag at the VISUALLY current transform — mid-
+      // ease, viewTransform can hold the end of an in-flight CSS
+      // transition rather than what the eye sees — then freeze it
+      // there so the takeover is jump-free.
+      dragMoved = true;
+      cancelZoomAnim();
+      var vis = readVisibleTransform(viewTransformSvg);
+      sscale = (vis != null) ? vis.scale : viewTransform.scale;
+      stx    = (vis != null) ? vis.tx    : viewTransform.tx;
+      sty    = (vis != null) ? vis.ty    : viewTransform.ty;
+      sx = e.clientX; sy = e.clientY;
+      applyViewTransform(graph, sscale, stx, sty, true);
+      return;
+    }
     var dx = (e.clientX - sx) / sscale;
     var dy = (e.clientY - sy) / sscale;
     // Clamp so the diagram can never be dragged entirely off-screen.
@@ -4607,6 +4633,13 @@ function enableViewerInteractivity(graph)
     dragging = false;
     containerEl.classList.remove('dragging');
     try { containerEl.releasePointerCapture(e.pointerId); } catch(_) {}
+    if (dragMoved)
+    {
+      dragMoved = false;
+      // The pan moved the camera off the fitted view — refresh the fit
+      // button so it offers "Fit to view" (state tracks the camera).
+      updateZoomFitButtonUi();
+    }
   };
 
   containerEl.addEventListener('pointerup', endDrag);
@@ -4779,6 +4812,9 @@ function enableViewerInteractivity(graph)
       touchPan = null;
       touchPinch = null;
       touchClaimed = false;
+      // Touch pans (and the eager touchstart animation cancel) can
+      // leave the camera off the fitted view — refresh the fit button.
+      updateZoomFitButtonUi();
     }
     else if (e.touches.length === 1 && touchPinch != null)
     {
@@ -5012,7 +5048,13 @@ function animateCameraTo(toS, toTx, toTy, dur, easing)
       var tx = fromTx + (toTx - fromTx) * k;
       var ty = fromTy + (toTy - fromTy) * k;
       applyViewTransform(streamGraph, fromS, tx, ty, true);
-      if (t < 1) zoomAnimRaf = requestAnimationFrame(stepPan);
+      if (t < 1)
+      {
+        zoomAnimRaf = requestAnimationFrame(stepPan);
+        return;
+      }
+      // Landed — refresh the fit button (its state tracks the camera).
+      updateZoomFitButtonUi();
     };
     zoomAnimRaf = requestAnimationFrame(stepPan);
     return;
@@ -5034,7 +5076,13 @@ function animateCameraTo(toS, toTx, toTy, dur, easing)
     var tx = anchorPx / s - anchorMx;
     var ty = anchorPy / s - anchorMy;
     applyViewTransform(streamGraph, s, tx, ty, true);
-    if (t < 1) zoomAnimRaf = requestAnimationFrame(step);
+    if (t < 1)
+    {
+      zoomAnimRaf = requestAnimationFrame(step);
+      return;
+    }
+    // Landed — refresh the fit button (its state tracks the camera).
+    updateZoomFitButtonUi();
   };
 
   zoomAnimRaf = requestAnimationFrame(step);
@@ -5126,6 +5174,23 @@ function computeFitWholeTransform()
   var tx = (cw / s) / 2 - cx;
   var ty = (ch / s) / 2 - cy - (STREAM_BOTTOM_GUTTER / 2) / s;
   return { s: s, tx: tx, ty: ty };
+}
+
+/**
+ * True when the live camera already shows the fit-whole view (same
+ * ~1 px / 0.3% tolerance as animateCameraTo's no-op check). A null fit
+ * target (no graph, hidden container) counts as fitted. Lets the fit
+ * button track the CAMERA rather than just the zoom toggle — a mouse
+ * pan or an interrupted ease must flip it back to "Fit to view".
+ */
+function cameraAtFitWhole()
+{
+  var t = computeFitWholeTransform();
+  if (t == null) return true;
+  var s = Math.max(viewTransform.scale, t.s);
+  return Math.abs(viewTransform.scale - t.s) < 0.003 &&
+         Math.abs(viewTransform.tx - t.tx) * s < 1.5 &&
+         Math.abs(viewTransform.ty - t.ty) * s < 1.5;
 }
 
 /**
@@ -5430,15 +5495,17 @@ function applyLayoutChange(targetState)
   }
 }
 
-// Sync the zoom/fit toolbar button's icon + title with dblclickZoomedIn.
-// dblclickZoomedIn=false → button offers "zoom in"; true → offers "fit".
+// Sync the zoom/fit toolbar button's icon + title with the view state:
+// "Fit to view" whenever the user zoomed in (dblclickZoomedIn) OR the
+// camera sits anywhere off the fit-whole view (pan, interrupted ease);
+// "zoom in" (1:1) only when the diagram is actually fitted.
 function updateZoomFitButtonUi()
 {
   var iconZoomIn = document.getElementById('zoom-fit-icon-zoomin');
   var iconFit = document.getElementById('zoom-fit-icon-fit');
   var btn = document.getElementById('zoom-fit-btn');
   if (btn == null) return;
-  if (dblclickZoomedIn)
+  if (dblclickZoomedIn || !cameraAtFitWhole())
   {
     if (iconZoomIn) iconZoomIn.style.display = 'none';
     if (iconFit) iconFit.style.display = '';
@@ -6128,7 +6195,10 @@ document.getElementById('zoom-out-btn').addEventListener('click', function()
 document.getElementById('zoom-fit-btn').addEventListener('click', function()
 {
   if (streamGraph == null) return;
-  if (dblclickZoomedIn)
+  // Fit whenever the camera is off the fitted view — regardless of how
+  // it got there (zoom toggle, mouse pan, interrupted ease). Only when
+  // the diagram is already fitted does the button zoom in.
+  if (dblclickZoomedIn || !cameraAtFitWhole())
   {
     customFitView();
     return;
