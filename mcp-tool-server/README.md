@@ -155,6 +155,7 @@ Opens the draw.io editor with XML content.
 | `content` | string | Yes | Draw.io XML content |
 | `lightbox` | boolean | No | Read-only view mode (default: false) |
 | `dark` | string | No | "auto", "true", or "false" (default: "auto") |
+| `routing` | string | No | `"libavoid"` reroutes connectors around shapes (obstacle-avoiding orthogonal routing) before opening |
 
 ### `open_drawio_csv`
 
@@ -175,6 +176,25 @@ Opens the draw.io editor with a Mermaid.js diagram.
 | `content` | string | Yes | Mermaid.js syntax |
 | `lightbox` | boolean | No | Read-only view mode (default: false) |
 | `dark` | string | No | "auto", "true", or "false" (default: "auto") |
+
+### `search_shapes`
+
+Searches the draw.io shape library (~10,000 shapes: AWS, Azure, GCP, Cisco, Kubernetes, P&ID, electrical, BPMN, …) and returns matching shapes with ready-to-use style strings for `open_drawio_xml`. Use only for diagrams needing industry-specific icons — standard flowcharts, UML, ERD, and org charts don't need it.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Space-separated keywords (e.g. `aws lambda`, `cisco router`) |
+| `limit` | number | No | Max results (default: 10, max: 50) |
+
+### `list_pages` / `get_page` / `set_page`
+
+Page-level access to a local multi-page `.drawio` file, so one page can be inspected or edited without loading the whole file. Pages are addressed by zero-based index, exact name, or id (as returned by `list_pages`). Compressed pages are decompressed/re-compressed transparently. Paths must end in `.drawio` or `.xml`.
+
+| Tool | Parameters | Result |
+|------|------------|--------|
+| `list_pages` | `path` | `[{index, id, name, approxSizeBytes}]` for every page |
+| `get_page` | `path`, `page` | The page's `mxGraphModel` XML |
+| `set_page` | `path`, `page`, `content` | Replaces that page's content (a single `<mxGraphModel>` element); all other pages stay untouched |
 
 ## Example Prompts
 
