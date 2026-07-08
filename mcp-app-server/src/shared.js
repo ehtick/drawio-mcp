@@ -1544,8 +1544,13 @@ function applyPostLayout(graph, algorithm, onDone, onMorphStart, awaitBeforeMorp
   }
   if (!hasVertex) { done(false); return; }
 
-  // Canonical edge treatment (orthogonal + rounded), shared with the
-  // editor's mermaid-edit post-pass and Arrange > Layout dialog default.
+  // Canonical edge treatment (strict orthogonalEdgeStyle connectors +
+  // rounded corners since drawio-elk f1af7db; the value ships with the CDN
+  // bundle), shared with the editor's mermaid-edit post-pass and Arrange >
+  // Layout dialog default. Safe to merge unconditionally here: this pass
+  // only ever runs the layered flow presets (see resolvePostLayout and the
+  // layout-cycle button), and the canonical MODE is layered-only by
+  // contract — the editor's resolveLayoutList guards non-layered presets.
   // resizeParent:false pins the mermaid-measured node sizes — drawio-
   // mermaid is the authority on sizing (its measureText falls back to a
   // calibrated estimate when the iframe isn't rendered yet), and the

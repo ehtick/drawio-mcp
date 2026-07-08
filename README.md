@@ -13,7 +13,7 @@ This repository offers four approaches for integrating draw.io with AI assistant
 | **Requires installation** | No (hosted at `mcp.draw.io`) | Yes (npm package) | One-line plugin install (draw.io Desktop only for PNG/SVG/PDF export) | No — just paste instructions |
 | **Supports XML, CSV, Mermaid** | XML only | ✅ All three | XML only (native format) | ✅ All three |
 | **Editable in draw.io** | Via "Open in draw.io" button | ✅ Directly | ✅ Directly | Via link |
-| **Works with** | Claude.ai, VS Code, any MCP Apps host | Claude Desktop, any MCP client | Claude Code | Claude.ai (with Projects) |
+| **Works with** | Claude.ai, VS Code, Cursor, any MCP Apps host | Claude Desktop, Cursor, any MCP client | Claude Code | Claude.ai (with Projects) |
 | **Best for** | Inline previews in chat | Local desktop workflows | Local development workflows | Quick setup, no install needed |
 
 ---
@@ -28,7 +28,7 @@ The official hosted endpoint is available at:
 https://mcp.draw.io/mcp
 ```
 
-Add this URL as a remote MCP server in Claude.ai or any MCP Apps-compatible host — no installation required.
+Add this URL as a remote MCP server in Claude.ai, Cursor, or any MCP Apps-compatible host — no installation required. In Cursor, diagrams render inline in the Agent chat ([one-click install](https://cursor.com/en/install-mcp?name=drawio&config=eyJ1cmwiOiJodHRwczovL21jcC5kcmF3LmlvL21jcCJ9)).
 
 You can also run the server locally via Node.js or deploy your own instance to Cloudflare Workers.
 
@@ -47,6 +47,8 @@ You can also run the server locally via Node.js or deploy your own instance to C
 The original MCP server that opens diagrams directly in the draw.io editor. Supports XML, CSV, and Mermaid.js formats with lightbox and dark mode options. Published as [`@drawio/mcp`](https://www.npmjs.com/package/@drawio/mcp) on npm.
 
 Quick start: `npx @drawio/mcp`
+
+Setup instructions are available for Claude Desktop, Claude Code, VS Code (GitHub Copilot), and Cursor (with one-click install).
 
 **[Full documentation →](mcp-tool-server/README.md)**
 
