@@ -3,9 +3,10 @@
 Obstacle-avoiding orthogonal **edge routing** for the `routing: "libavoid"`
 option on `open_drawio_xml`. Vendored from [`libavoid-js`](https://github.com/Aksem/libavoid-js).
 
-Unlike the app server (which inlines the *browser* build + base64 wasm into a
-sandboxed iframe), the tool server runs in plain Node, so we vendor the **node
-build** and let it read the wasm from disk — no patching, no base64.
+Unlike the app server (which loads the pure-JS *browser* bundle from the
+viewer.diagrams.net CDN into a sandboxed iframe), the tool server runs in
+plain Node, so we vendor the **node build** and let it read the wasm from
+disk — no patching, no base64.
 
 Artifacts:
 
@@ -15,8 +16,9 @@ Artifacts:
 - `libavoid.wasm` — the Emscripten binary (~492 KB). Loaded by path:
   `await AvoidLib.load(join(__dirname, "vendor/libavoid/libavoid.wasm"))`.
 - `libavoid-routing.js` — the shared routing core (`globalThis.AvoidRouting`:
-  `computeRoutes` incl. fixed-connection-point pins and jettySize stub
-  checkpoints, plus the pure geometry helpers). **Verbatim copy** — the
+  `computeRoutes` incl. fixed-connection-point pins, jetty checkpoints, and
+  dangling-end free-point routing, plus the pure geometry helpers).
+  **Verbatim copy** — the
   canonical source is `drawio-dev src/main/webapp/js/libavoid-js/
   libavoid-routing.js` (the same artifact the draw.io editor bundles and the
   app server loads from the CDN); copy it over when it changes there. At

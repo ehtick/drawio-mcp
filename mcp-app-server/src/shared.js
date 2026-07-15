@@ -11,12 +11,12 @@ import { buildTagMap, searchShapes } from "../../shared/shape-search.js";
 /**
  * Build the self-contained HTML string that renders diagrams.
  * The MCP Apps App class and pako deflate are inlined. The draw.io viewer,
- * drawio-elk, drawio-mermaid, and libavoid (glue + wasm payload + loader +
- * routing core from js/libavoid-js/) load from the viewer.diagrams.net CDN
+ * drawio-elk, drawio-mermaid, and libavoid (pure-JS router bundle + routing
+ * core from js/libavoid-js/) load from the viewer.diagrams.net CDN
  * by default — cached cross-session and kept in version-sync with each
- * draw.io release. Pass viewerJs/elkJs/mermaidJs (or libavoidJs +
- * libavoidWasmB64) to inline a local build instead (for dev — see
- * VIEWER_PATH/ELK_PATH/MERMAID_PATH in index.js).
+ * draw.io release. Pass viewerJs/elkJs/mermaidJs/libavoidJs to inline a
+ * local build instead (for dev — see VIEWER_PATH/ELK_PATH/MERMAID_PATH in
+ * index.js).
  *
  * @param {string} appWithDepsJs - The processed MCP Apps SDK bundle (exports stripped, App alias added).
  * @param {string} pakoDeflateJs - The pako deflate browser bundle.
@@ -24,9 +24,8 @@ import { buildTagMap, searchShapes } from "../../shared/shape-search.js";
  * @param {object} [options] - Optional configuration.
  * @param {string} [options.viewerJs] - If provided, inlines this JS instead of loading viewer-static.min.js from CDN.
  * @param {string} [options.elkJs] - If provided, inlines this drawio-elk bundle instead of loading it from CDN. Defines `var ELK` (engine) plus `ElkLayout`/`ElkAdapter`/`ElkApplier` (the mxGraph bridge + postLayout facade), consumed by drawio-mermaid and the postLayout pass. Loaded before mermaid.
- * @param {string} [options.libavoidJs] - If provided (together with libavoidWasmB64), inlines this processed libavoid-js bundle (exports stripped, `globalThis.AvoidLib` aliased, loader patched to read `globalThis.__LIBAVOID_WASM_BINARY` — see processLibavoidBundle) with libavoid-routing.js (defines `globalThis.AvoidRouting`) appended, instead of loading the libavoid block from the CDN. Powers the `routing: "libavoid"` edge-routing pass.
- * @param {string} [options.libavoidWasmB64] - The libavoid.wasm binary, base64-encoded, for the inline case. Decoded to a Uint8Array and handed to the Emscripten module as `wasmBinary` so the router instantiates with no fetch.
- * @param {string[]} [options.libavoidUrls] - The four libavoid script URLs in load order (glue, wasm payload, loader, routing core), typically ETag-versioned (libavoid-versions.js) so a draw.io release busts the browser cache immediately. Defaults to the plain CDN URLs; ignored when libavoidJs/libavoidWasmB64 inline a local build.
+ * @param {string} [options.libavoidJs] - If provided, inlines this libavoid-js bundle (the drawio-dev js/libavoid-js/libavoid.min.js pure-JS build, used as-is — a self-contained classic script that publishes `globalThis.Avoid` and parks `window.__libavoidReady` synchronously) with libavoid-routing.js (defines `globalThis.AvoidRouting`) appended, instead of loading the libavoid block from the CDN. Powers the `routing: "libavoid"` edge-routing pass.
+ * @param {string[]} [options.libavoidUrls] - The two libavoid script URLs in load order (pure-JS router bundle, routing core), typically ETag-versioned (libavoid-versions.js) so a draw.io release busts the browser cache immediately. Defaults to the plain CDN URLs; ignored when libavoidJs inlines a local build.
  * @param {string} [options.buildId] - Build identifier (git SHA + timestamp). Exposed as window.__DRAWIO_BUILD in the iframe.
  * @returns {string} Self-contained HTML string.
  */
@@ -35,69 +34,39 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
   var viewerJs = (options && options.viewerJs) || null;
   var elkJs = (options && options.elkJs) || null;
   var libavoidJs = (options && options.libavoidJs) || null;
-  var libavoidWasmB64 = (options && options.libavoidWasmB64) || null;
   var buildId = (options && options.buildId) || "unknown";
 
-  // libavoid-js (WASM orthogonal edge router). The glue defines
-  // globalThis.AvoidLib; the loader below decodes the base64 wasm to a
-  // Uint8Array, hands it to the Emscripten module as wasmBinary (no fetch —
-  // see processLibavoidBundle), and kicks off async instantiation. The
-  // resulting promise is parked on window.__libavoidReady (resolving to the
-  // Avoid namespace) so the routing pass can await it on demand; load runs
-  // eagerly at page init so the wasm is usually warm by the time a
-  // routing:"libavoid" diagram finishes rendering. Failures degrade
-  // gracefully — applyRouting just skips and the diagram renders unrouted.
-  var libavoidLoader =
-    'function __libavoidB64ToBytes(b64)\n' +
-    '{\n' +
-    '  var bin = atob(b64);\n' +
-    '  var bytes = new Uint8Array(bin.length);\n' +
-    '  for (var i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i); }\n' +
-    '  return bytes;\n' +
-    '}\n' +
-    '(function()\n' +
-    '{\n' +
-    '  if (typeof AvoidLib === "undefined") { console.error("[libavoid] AvoidLib global missing"); return; }\n' +
-    '  try { globalThis.__LIBAVOID_WASM_BINARY = __libavoidB64ToBytes(window.__LIBAVOID_WASM_B64); }\n' +
-    '  catch (e) { console.error("[libavoid] base64 decode failed:", e); return; }\n' +
-    '  window.__libavoidReady = AvoidLib.load().then(function()\n' +
-    '  {\n' +
-    '    window.Avoid = AvoidLib.getInstance();\n' +
-    '    return window.Avoid;\n' +
-    '  }).catch(function(e)\n' +
-    '  {\n' +
-    '    console.error("[libavoid] wasm load failed; routing disabled:", (e && e.message), e);\n' +
-    '    return null;\n' +
-    '  });\n' +
-    '})();\n';
-
+  // libavoid-js (obstacle-avoiding orthogonal edge router). libavoid.min.js
+  // is the pure-JS Emscripten build from drawio-dev js/libavoid-js/ — a
+  // self-contained classic script (no WASM, no fetch) that publishes
+  // globalThis.Avoid and parks window.__libavoidReady (an already-resolved
+  // promise: the Avoid namespace, or null when init failed) synchronously on
+  // execution. The routing pass awaits __libavoidReady on demand; failures
+  // degrade gracefully — applyRouting just skips and the diagram renders
+  // unrouted.
+  //
   // ETag-versioned URLs from the Node server (options.libavoidUrls, see
   // libavoid-versions.js) bust the CDN's 30-day browser cache exactly when a
   // draw.io release changes a file. The plain-URL default below applies only
   // when the option is omitted — the Worker build (build-html.js) and tests;
   // the Node server always passes the option (a failed version check
   // surfaces as plain URLs from libavoid-versions.js, not from this array).
-  // Fixed order: glue -> wasm payload -> loader -> routing core.
+  // Fixed order: pure-JS router bundle -> routing core.
   var libavoidSrcs = (options && options.libavoidUrls) || [
     'https://viewer.diagrams.net/js/libavoid-js/libavoid.min.js',
-    'https://viewer.diagrams.net/js/libavoid-js/libavoid-wasm.js',
-    'https://viewer.diagrams.net/js/libavoid-js/libavoid-loader.js',
     'https://viewer.diagrams.net/js/libavoid-js/libavoid-routing.js'
   ];
 
-  var libavoidBlock = (libavoidJs && libavoidWasmB64)
-    ? '<!-- libavoid-js (inlined WASM edge router). Defines globalThis.AvoidLib; the loader feeds the base64 wasm in as wasmBinary (no fetch). Powers the routing:"libavoid" pass. -->\n' +
-      '    <script>' + libavoidJs + '</script>\n' +
-      '    <script>\n' +
-      '      window.__LIBAVOID_WASM_B64 = "' + libavoidWasmB64 + '";\n' +
-      '      ' + libavoidLoader +
-      '    </script>'
-    : '<!-- libavoid-js (WASM edge router) + shared routing core from the viewer.diagrams.net CDN,\n' +
-      '         like drawio-elk/drawio-mermaid: cached cross-session, version-synced with each draw.io\n' +
-      '         release, and byte-identical to what the draw.io editor bundles. The wasm rides as\n' +
-      '         base64 inside libavoid-wasm.js; libavoid-loader.js decodes it and parks\n' +
-      '         window.__libavoidReady — still no fetch, so the sandbox CSP is satisfied by plain\n' +
-      '         script-src. Fixed order: glue -> wasm payload -> loader -> routing core. -->\n' +
+  var libavoidBlock = libavoidJs
+    ? '<!-- libavoid-js (inlined local build: pure-JS router bundle + routing core). Publishes\n' +
+      '         globalThis.Avoid and parks window.__libavoidReady synchronously. Powers the\n' +
+      '         routing:"libavoid" pass. -->\n' +
+      '    <script>' + libavoidJs + '</script>'
+    : '<!-- libavoid-js (pure-JS edge router bundle) + shared routing core from the viewer.diagrams.net\n' +
+      '         CDN, like drawio-elk/drawio-mermaid: cached cross-session, version-synced with each\n' +
+      '         draw.io release, and byte-identical to what the draw.io editor bundles. The bundle\n' +
+      '         publishes globalThis.Avoid and parks window.__libavoidReady synchronously — no WASM,\n' +
+      '         no fetch, so the sandbox CSP is satisfied by plain script-src. -->\n' +
       libavoidSrcs.map(function(u)
       {
         return '    <script src="' + u + '"></script>';
@@ -1900,7 +1869,7 @@ function routeWithLibavoid(graph, Avoid)
 }
 
 /**
- * Async wrapper around routeWithLibavoid: await wasm readiness, then route.
+ * Async wrapper around routeWithLibavoid: await router readiness, then route.
  * Degrades gracefully — calls onDone(false) (diagram stays unrouted) when
  * libavoid isn't present, failed to load, or routing throws.
  *
@@ -4451,7 +4420,7 @@ function finalizeStreamingView(xml, opts)
     // Routing without ELK: the author's (LLM's) vertex positions are kept;
     // libavoid only computes obstacle-avoiding paths for the edges. The
     // normal fit above already ran (no postLayout), and routing doesn't move
-    // vertices, so no extra camera move is needed. applyRouting awaits wasm
+    // vertices, so no extra camera move is needed. applyRouting awaits router
     // readiness internally, so no rAF gate here.
     runRoutingPass(streamGraph);
   }
@@ -6399,39 +6368,6 @@ export function processElkBundle(raw)
       ElkApplier: "ElkApplier"
     },
     "drawio-elk.min.js");
-}
-
-/**
- * Process the libavoid-js browser bundle (obstacle-avoiding orthogonal edge
- * routing — the `routing: "libavoid"` pass). Ships as ESM ending in
- * `export{X as AvoidLib}` and uses `import.meta.url` (illegal in a classic
- * <script>). Three transforms before the standard strip-and-alias:
- *
- *   1. Neutralize `import.meta.url` → "". It is only used by the Emscripten
- *      module to locate the .wasm via fetch — which we bypass entirely.
- *   2. Patch the loader so the Emscripten factory receives `wasmBinary`
- *      (a Uint8Array set on globalThis). The sandboxed iframe has no
- *      allow-same-origin and the host CSP's connect-src forbids data: URIs,
- *      so we hand the wasm bytes in directly instead of fetching them.
- *   3. Strip the ESM export and alias `globalThis.AvoidLib`.
- */
-export function processLibavoidBundle(raw)
-{
-  raw = raw.replace(/import\.meta\.url/g, '""');
-
-  // `this.avoidLib=await le({locateFile:ce})` →
-  // `... await le({locateFile:ce,wasmBinary:(globalThis.__LIBAVOID_WASM_BINARY||void 0)})`
-  var patched = raw.replace(
-    /(await\s+\w+\(\{\s*locateFile\s*:\s*\w+)\s*\}\)/,
-    "$1,wasmBinary:(globalThis.__LIBAVOID_WASM_BINARY||void 0)})"
-  );
-
-  if (patched === raw)
-  {
-    throw new Error("Could not patch libavoid loader to accept wasmBinary (loader signature changed?)");
-  }
-
-  return stripEsmExportsAndAlias(patched, { AvoidLib: "AvoidLib" }, "libavoid.min.js");
 }
 
 // ── Diagram validation ───────────────────────────────────────────────────────

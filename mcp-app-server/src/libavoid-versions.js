@@ -5,22 +5,23 @@
 // browser cache can keep serving a stale router for up to a month. The HTML
 // is delivered to the host as an MCP resource and rendered in a sandboxed
 // iframe, so the scripts cannot be served same-origin from this server -
-// but the URLs can be VERSIONED: the Node server HEADs the four files at
+// but the URLs can be VERSIONED: the Node server HEADs the two files at
 // startup (and daily on the HTTP transport - see index.js), derives a
 // version token from each ETag, and bakes it into the script URLs as
 // ?v=<token>. Clients keep long-lived caching per URL, and a release
 // changes the ETag -> changes the URL -> every client re-fetches exactly
-// once. Best effort: a failed or 404 HEAD (the path only exists once a
-// draw.io release ships js/libavoid-js/) leaves the plain URL, which is the
-// previous behavior with its 30-day worst-case staleness.
+// once. Best effort: a failed or 404 HEAD leaves the plain URL, which is
+// the previous behavior with its 30-day worst-case staleness.
 
 const CDN_BASE = "https://viewer.diagrams.net/js/libavoid-js/";
 
-// Fixed load order: glue -> wasm payload -> loader -> routing core.
+// Fixed load order: pure-JS router bundle -> routing core. Requires the
+// draw.io release that ships the pure-JS two-file js/libavoid-js/ layout
+// (the bundle publishes globalThis.Avoid and parks window.__libavoidReady
+// itself); the earlier WASM layout's libavoid-wasm.js/libavoid-loader.js
+// no longer exist and are not referenced.
 export const LIBAVOID_FILES = [
   "libavoid.min.js",
-  "libavoid-wasm.js",
-  "libavoid-loader.js",
   "libavoid-routing.js"
 ];
 
@@ -45,7 +46,7 @@ async function versionToken(file)
 }
 
 /**
- * The four libavoid script URLs in load order, ETag-versioned where the CDN
+ * The two libavoid script URLs in load order, ETag-versioned where the CDN
  * answered. Safe to call repeatedly (each call re-checks). `prev` (the
  * previous result) keeps a file's last-known URL when its check fails: a
  * transient HEAD failure is not a version change and must not downgrade a

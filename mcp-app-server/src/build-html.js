@@ -64,10 +64,10 @@ const pakoDeflateJs = fs.readFileSync(
 // out of generated-html.js (~1.5 MB), lets browsers cache them cross-session,
 // and keeps their versions in sync with the viewer per draw.io release.
 
-// libavoid (WASM edge router) is NOT inlined — the HTML loads glue + base64
-// wasm payload + loader + shared routing core from the viewer.diagrams.net
-// CDN, like drawio-elk and drawio-mermaid (see buildHtml's libavoidBlock).
-// Keeps ~700 KB out of generated-html.js.
+// libavoid (edge router) is NOT inlined — the HTML loads the pure-JS router
+// bundle + shared routing core from the viewer.diagrams.net CDN, like
+// drawio-elk and drawio-mermaid (see buildHtml's libavoidBlock).
+// Keeps ~850 KB out of generated-html.js.
 
 // Read the shared XML reference (single source of truth for all prompts)
 const xmlReference = fs.readFileSync(

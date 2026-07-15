@@ -81,11 +81,11 @@ if (process.env.MERMAID_PATH)
   console.log("Inlining local drawio-mermaid from", process.env.MERMAID_PATH);
 }
 
-// libavoid (WASM obstacle-avoiding edge router, powers the routing: "libavoid"
-// pass) is NOT inlined — the HTML loads glue + base64 wasm payload + loader +
-// shared routing core from the viewer.diagrams.net CDN, like drawio-elk and
+// libavoid (obstacle-avoiding edge router, powers the routing: "libavoid"
+// pass) is NOT inlined — the HTML loads the pure-JS router bundle + shared
+// routing core from the viewer.diagrams.net CDN, like drawio-elk and
 // drawio-mermaid (see buildHtml's libavoidBlock). Cached cross-session,
-// version-synced with each draw.io release, and drops ~700 KB from the HTML.
+// version-synced with each draw.io release, and drops ~850 KB from the HTML.
 // The URLs are ETag-versioned at startup (and daily on the HTTP transport)
 // so a release busts the CDN's 30-day browser cache immediately — see
 // libavoid-versions.js; on a failed startup check the plain URLs are used.
