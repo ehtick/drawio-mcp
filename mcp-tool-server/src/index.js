@@ -140,6 +140,43 @@ function loadShapeSearch()
   return shapeSearchPromise;
 }
 
+// Longest URL the Windows shell opens reliably from a .url file:
+// the InternetShortcut handler fails with Win32 error 122 ("The data
+// area passed to a system call is too small") beyond
+// INTERNET_MAX_URL_LENGTH (2083), so stay under it with some headroom.
+const WIN_URL_FILE_MAX_LENGTH = 2000;
+
+/**
+ * Builds an HTML page that forwards the browser to the given URL from
+ * JavaScript. Browsers accept URLs far beyond OS shell limits, and the
+ * #create= fragment never leaves the client, so this has no practical
+ * length cap.
+ */
+function buildRedirectHtml(url)
+{
+  // The #create= payload is percent-encoded, but DRAWIO_BASE_URL comes
+  // from the environment, so escape anything that could break out of
+  // the string literal or close the script element.
+  const escaped = url
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, "\\\"")
+    .replace(/</g, "\\u003C");
+
+  return "<!DOCTYPE html>\n" +
+    "<html>\n" +
+    "<head>\n" +
+    "<meta charset=\"utf-8\">\n" +
+    "<title>draw.io</title>\n" +
+    "</head>\n" +
+    "<body>\n" +
+    "Opening draw.io...\n" +
+    "<script>\n" +
+    "window.location.replace(\"" + escaped + "\");\n" +
+    "</script>\n" +
+    "</body>\n" +
+    "</html>\n";
+}
+
 /**
  * Opens a URL in the default browser (cross-platform)
  */
@@ -152,9 +189,23 @@ function openBrowser(url)
     // cmd.exe's "start" command treats & as a command separator and
     // drops everything after # in URLs, so the #create=... fragment
     // (which carries the entire diagram payload) is silently lost.
-    // Writing a temporary .url file preserves the full URL intact.
-    const tmpFile = join(tmpdir(), "drawio-mcp-" + Date.now() + ".url");
-    writeFileSync(tmpFile, "[InternetShortcut]\r\nURL=" + url + "\r\n");
+    // Writing a temporary .url file preserves the full URL intact, but
+    // only up to the shell's InternetShortcut length limit — beyond it
+    // the diagram is opened through a temporary HTML page instead,
+    // which redirects from JavaScript (issue #54).
+    let tmpFile;
+
+    if (url.length <= WIN_URL_FILE_MAX_LENGTH)
+    {
+      tmpFile = join(tmpdir(), "drawio-mcp-" + Date.now() + ".url");
+      writeFileSync(tmpFile, "[InternetShortcut]\r\nURL=" + url + "\r\n");
+    }
+    else
+    {
+      tmpFile = join(tmpdir(), "drawio-mcp-" + Date.now() + ".html");
+      writeFileSync(tmpFile, buildRedirectHtml(url));
+    }
+
     child = spawn("cmd", ["/c", "start", "", tmpFile], { shell: false, stdio: "ignore" });
 
     setTimeout(function()
