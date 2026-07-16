@@ -5,22 +5,40 @@ This directory groups assistant-side integrations by **host** — one subdirecto
 | Directory | Host | Status |
 |-----------|------|--------|
 | [`claude-code/`](claude-code/README.md) | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | ✅ Available |
+| [`codex/drawio/`](codex/drawio/README.md) | [Codex CLI](https://github.com/openai/codex) | ✅ Available |
 
-The Claude Code plugin is published through a marketplace manifest at the repo root ([`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)), so users can install it with:
+Each host has its own marketplace manifest at the repo root, so users install with that
+host's own commands.
+
+**Claude Code** — via [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json):
 
 ```
 /plugin marketplace add jgraph/drawio-mcp
 /plugin install drawio@drawio
 ```
 
+**Codex** — via [`.agents/plugins/marketplace.json`](../.agents/plugins/marketplace.json):
+
+```bash
+codex plugin marketplace add jgraph/drawio-mcp
+codex plugin add drawio@drawio
+```
+
 ## Adding a plugin for another host
 
-If support for another assistant (Cursor, Codex, etc.) is added later, it lands as a sibling directory at this level:
+Support for a new assistant lands as a sibling directory at this level:
 
 ```
 plugins/
-└── claude-code/              ← Claude Code plugin
+├── claude-code/             ← Claude Code plugin (plugin root)
+└── codex/                   ← Codex host group
+    └── drawio/              ← Codex plugin root (folder name == plugin.json "name")
 ```
+
+Codex normalizes a plugin's root folder name to match its `plugin.json` `"name"`, so the
+Codex plugin root is nested one level (`codex/drawio/`) inside the host group directory;
+Claude Code has no such rule, so `claude-code/` is itself the plugin root. If another
+assistant (Cursor, etc.) is added later, it follows the same pattern in its own way.
 
 The draw.io guidance itself — *how* to generate `.drawio` files, embed XML in PNG/SVG/PDF, and produce `app.diagrams.net` URLs — is shared. Only the wrapping (manifest format, file layout, invocation prefix) differs per host, and each host has its own plugin/skill model, so the wrapping is not assumed to be uniform.
 

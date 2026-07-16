@@ -73,6 +73,15 @@ By default, the plugin writes a `.drawio` file and opens it in draw.io. Mention 
 
 **[Full documentation →](plugins/claude-code/README.md)**
 
+The same `drawio` skill is also packaged as a **Codex CLI** plugin (under [`plugins/codex/drawio/`](plugins/codex/drawio/README.md)) — install it inside Codex with:
+
+```bash
+codex plugin marketplace add jgraph/drawio-mcp
+codex plugin add drawio@drawio
+```
+
+**[Full documentation →](plugins/codex/drawio/README.md)**
+
 ---
 
 ## Alternative: Project Instructions (No MCP Required)
