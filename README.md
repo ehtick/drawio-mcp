@@ -6,14 +6,14 @@ The official [draw.io](https://www.draw.io) MCP (Model Context Protocol) server 
 
 This repository offers four approaches for integrating draw.io with AI assistants. Pick the one that fits your setup:
 
-| | [MCP App Server](#mcp-app-server) | [MCP Tool Server](#mcp-tool-server) | [Claude Code Plugin](#claude-code-plugin) | [Project Instructions](#alternative-project-instructions-no-mcp-required) |
+| | [MCP App Server](#mcp-app-server) | [MCP Tool Server](#mcp-tool-server) | [Assistant Plugins](#assistant-plugins-claude-code-codex-cli) | [Project Instructions](#alternative-project-instructions-no-mcp-required) |
 |---|---|---|---|---|
 | **How it works** | Renders diagrams inline in chat | Opens diagrams in your browser | Generates `.drawio` files, optional PNG/SVG/PDF export or browser URL | Claude generates draw.io URLs via Python |
 | **Diagram output** | Interactive viewer embedded in conversation | draw.io editor in a new tab | `.drawio`, `.drawio.png` / `.svg` / `.pdf`, or browser URL | Clickable link to draw.io |
 | **Requires installation** | No (hosted at `mcp.draw.io`) | Yes (npm package) | One-line plugin install (draw.io Desktop only for PNG/SVG/PDF export) | No — just paste instructions |
 | **Supports XML, CSV, Mermaid** | XML only | ✅ All three | XML only (native format) | ✅ All three |
 | **Editable in draw.io** | Via "Open in draw.io" button | ✅ Directly | ✅ Directly | Via link |
-| **Works with** | Claude.ai, VS Code, Cursor, any MCP Apps host | Claude Desktop, Cursor, any MCP client | Claude Code | Claude.ai (with Projects) |
+| **Works with** | Claude.ai, VS Code, Cursor, any MCP Apps host | Claude Desktop, Cursor, any MCP client | Claude Code, Codex CLI | Claude.ai (with Projects) |
 | **Best for** | Inline previews in chat | Local desktop workflows | Local development workflows | Quick setup, no install needed |
 
 ---
@@ -54,11 +54,11 @@ Setup instructions are available for Claude Desktop, Claude Code, VS Code (GitHu
 
 ---
 
-## Claude Code Plugin
+## Assistant Plugins (Claude Code, Codex CLI)
 
-A Claude Code plugin (under [`plugins/claude-code/`](plugins/claude-code/README.md)) that generates native `.drawio` files, with optional export to PNG, SVG, or PDF (with embedded XML so the exported file remains editable in draw.io) — or a browser URL that opens the diagram directly in `app.diagrams.net`. No MCP setup required.
+The `drawio` skill packaged as a plugin for AI coding assistants (under [`plugins/`](plugins/README.md)): it generates native `.drawio` files, with optional export to PNG, SVG, or PDF (with embedded XML so the exported file remains editable in draw.io) — or a browser URL that opens the diagram directly in `app.diagrams.net`. No MCP setup required. The same skill ships for two hosts:
 
-Install from this repo's marketplace inside Claude Code:
+**Claude Code** ([full documentation →](plugins/claude-code/README.md)) — install from this repo's marketplace:
 
 ```
 /plugin marketplace add jgraph/drawio-mcp
@@ -67,20 +67,16 @@ Install from this repo's marketplace inside Claude Code:
 
 Or load it directly from a local clone with `claude --plugin-dir ./plugins/claude-code`.
 
-By default, the plugin writes a `.drawio` file and opens it in draw.io. Mention a format in your request to change the output:
-- `/drawio:drawio png ...` / `svg` / `pdf` — exports using the draw.io desktop CLI with `--embed-diagram`
-- `/drawio:drawio url ...` — compresses the XML with Node.js's built-in `zlib` and opens the result at `app.diagrams.net`. No draw.io Desktop needed; the `.drawio` file is kept locally as a persistent copy.
-
-**[Full documentation →](plugins/claude-code/README.md)**
-
-The same `drawio` skill is also packaged as a **Codex CLI** plugin (under [`plugins/codex/drawio/`](plugins/codex/drawio/README.md)) — install it inside Codex with:
+**Codex CLI** ([full documentation →](plugins/codex/drawio/README.md)) — install from the same marketplace repo:
 
 ```bash
 codex plugin marketplace add jgraph/drawio-mcp
 codex plugin add drawio@drawio
 ```
 
-**[Full documentation →](plugins/codex/drawio/README.md)**
+By default, the plugin writes a `.drawio` file and opens it in draw.io. Mention a format in your request to change the output:
+- `/drawio:drawio png ...` / `svg` / `pdf` — exports using the draw.io desktop CLI with `--embed-diagram`
+- `/drawio:drawio url ...` — compresses the XML with Node.js's built-in `zlib` and opens the result at `app.diagrams.net`. No draw.io Desktop needed; the `.drawio` file is kept locally as a persistent copy.
 
 ---
 
@@ -96,13 +92,13 @@ An alternative approach that works **without installing anything**. Add instruct
 
 Two optional, independent layout passes can run after the AI generates a diagram — one re-arranges the nodes, the other only reroutes the edges. Which are available depends on the approach:
 
-| Layout pass | What it does | App Server (`create_diagram`) | Tool Server (`open_drawio_xml`) | Claude Code Plugin | Project Instructions |
+| Layout pass | What it does | App Server (`create_diagram`) | Tool Server (`open_drawio_xml`) | Assistant Plugins | Project Instructions |
 |---|---|---|---|---|---|
-| **ELK auto-layout** (`postLayout: "elk"`) | Re-arranges nodes into a clean layered layout; routes the edges as part of it | ✅ | — | planned (via draw.io Desktop ELK) | — |
-| **libavoid routing** (`routing: "libavoid"`) | Keeps node positions; reroutes connectors orthogonally *around* the shapes | ✅ | ✅ from **v1.3.0** | — | — |
+| **ELK auto-layout** (`postLayout: "elk"`) | Re-arranges nodes into a clean layered layout; routes the edges as part of it | ✅ | — | ✅ via draw.io Desktop CLI (`--layout`) | — |
+| **libavoid routing** (`routing: "libavoid"`) | Keeps node positions; reroutes connectors orthogonally *around* the shapes | ✅ | ✅ from **v1.3.0** | ✅ via draw.io Desktop CLI (`--layout libavoid`) | — |
 
 - These apply to **draw.io XML** diagrams. **Mermaid** diagrams are auto-laid-out already, so neither pass is needed.
-- The **App Server** applies these in the inline viewer after the diagram renders; the **Tool Server** applies libavoid server-side before opening the draw.io editor.
+- The **App Server** applies these in the inline viewer after the diagram renders; the **Tool Server** applies libavoid server-side before opening the draw.io editor; the **plugins** run them through the locally installed draw.io Desktop CLI.
 - Pick one, not both: ELK already routes its own edges, so adding libavoid on top is redundant. Use `postLayout` to re-arrange a layout, or `routing` to tidy the connectors on a layout you placed deliberately.
 
 ---
@@ -115,7 +111,7 @@ where diagram data goes for each approach.
 **No component sends your diagram to a cloud rasterizer.** `convert.diagrams.net` (or
 any cloud export endpoint) is not called anywhere in this repository, and there is no
 "local dependency missing → fall back to cloud" path. PNG/SVG/PDF export happens only
-in the Claude Code Plugin, which shells out to your **locally installed draw.io Desktop CLI**
+in the assistant plugins, which shell out to your **locally installed draw.io Desktop CLI**
 (located via `which drawio`); if it isn't installed, the `.drawio` file is kept and
 nothing is sent.
 
@@ -126,7 +122,7 @@ nothing is sent.
 | **MCP App Server — hosted (`mcp.draw.io`)** | **Yes** — it is sent to the draw.io server as the MCP request. Self-host instead (below) to keep it local. |
 | **MCP App Server — self-hosted** (local Node or your own Cloudflare) | No — processed by your server and embedded in HTML that renders client-side. |
 | **MCP Tool Server** (`@drawio/mcp`) | No — carried in the URL `#fragment`, which browsers do not transmit to the server. |
-| **Claude Code Plugin** | No — written locally and exported by your local draw.io Desktop CLI. |
+| **Assistant Plugins** (Claude Code, Codex CLI) | No — written locally and exported by your local draw.io Desktop CLI. |
 
 By default the servers do not write diagram content to their logs — only request
 metadata (method, session, status, timing). The Cloudflare-hosted App Server logs
@@ -143,7 +139,7 @@ requests. To reduce or remove them:
   viewer instead of loading it from `viewer.diagrams.net`.
 - **Tool Server:** set the `DRAWIO_BASE_URL` environment variable to a self-hosted
   draw.io instance.
-- **Claude Code Plugin:** the opt-in `/drawio:drawio url` mode opens the diagram at
+- **Assistant Plugins:** the opt-in `/drawio:drawio url` mode opens the diagram at
   `app.diagrams.net` (hardcoded — no `DRAWIO_BASE_URL` equivalent). Use the default
   `.drawio` output or local Desktop export instead if you need to avoid that request.
 
@@ -173,7 +169,7 @@ All four approaches above use this file as their single source of truth for LLM 
 |----------|-------------------------------|
 | MCP App Server | Reads the file at startup / build time and includes it in the tool description |
 | MCP Tool Server | Reads the file at startup (from repo or bundled copy via `prepack`) |
-| Claude Code Plugin | References the [GitHub raw URL](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/xml-reference.md) |
+| Assistant Plugins (Claude Code, Codex CLI) | Reference the [GitHub raw URL](https://raw.githubusercontent.com/jgraph/drawio-mcp/main/shared/xml-reference.md) |
 | Project Instructions | Users copy its contents into their Claude Project |
 
 When updating XML generation guidance, edit only `shared/xml-reference.md` — changes propagate to all consumers automatically.
