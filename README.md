@@ -34,7 +34,7 @@ You can also run the server locally via Node.js or deploy your own instance to C
 
 **Tools:**
 - **`create_diagram`** — Renders draw.io XML as an interactive diagram inline in chat
-- **`search_shapes`** — Searches 10,000+ shapes across all draw.io libraries (AWS, Azure, GCP, P&ID, electrical, Cisco, Kubernetes, UML, BPMN, etc.) by keyword. Returns exact style strings that can be used directly in XML. Use this to find the correct shape before calling `create_diagram`.
+- **`search_shapes`** — Searches 10,000+ shapes across all draw.io libraries (AWS, Azure, GCP, P&ID, electrical, Cisco, Kubernetes, UML, BPMN, etc.) by keyword, supplemented by the draw.io icon service (brand logos and general-purpose concept icons) when the built-in libraries have no good match. Returns exact style strings that can be used directly in XML. Use this to find the correct shape before calling `create_diagram`.
 
 **[Full documentation →](mcp-app-server/README.md)**
 
@@ -179,6 +179,8 @@ When updating XML generation guidance, edit only `shared/xml-reference.md` — c
 ## Shape Search Index
 
 The `search_shapes` tool is powered by a pre-built index of all draw.io shapes. The index is generated from the live draw.io client (`https://app.diagrams.net/js/app.min.js`) by running all sidebar palette initializations in Node.js via jsdom and capturing the shape data.
+
+Icons from the draw.io icon service (`icons.diagrams.net` — the same grouped icon search the editor sidebar uses) are **not** part of this index: `search_shapes` queries the service live when the local index has no strong match for a query, returning the icons as `shape=image` styles. Set `DRAWIO_ICON_SERVICE_URL` to a self-hosted service to override the endpoint, or to `off` to disable icon supplementation.
 
 `shape-search/search-index.json` is committed to the repository and is **automatically refreshed on every draw.io release** via the [Update Shape Search Index](.github/workflows/update-search-index.yml) GitHub Action — no manual step is required to stay in sync with the latest shapes.
 

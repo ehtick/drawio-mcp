@@ -192,17 +192,23 @@ function matchTerm(tagMap, term)
  * bonus for exact over Soundex matches (tiebreaker).
  * Score per term: +1.0 for exact tag match, +0.5 for Soundex-only match.
  *
+ * The returned `strong` flag reports whether the best match exact-matched
+ * every query term — the signal that local stencil coverage for this query
+ * is genuine rather than Soundex or OR-fallback noise (e.g. patch panels
+ * matching only the "panel" in "solar panel").
+ *
  * @param {Array} shapeIndex - The flat shape array.
  * @param {Object} tagMap - Pre-built tag→indices map from buildTagMap().
  * @param {string} query - Space-separated search terms.
  * @param {number} limit - Maximum results to return.
- * @returns {Array} Matching shapes: [{style, w, h, title}].
+ * @returns {{results: Array, strong: boolean}} Matching shapes
+ *   [{style, w, h, title}] plus the match-quality flag.
  */
-export function searchShapes(shapeIndex, tagMap, query, limit)
+export function searchShapesWithMeta(shapeIndex, tagMap, query, limit)
 {
   if (!query || !shapeIndex || shapeIndex.length === 0)
   {
-    return [];
+    return { results: [], strong: false };
   }
 
   // Normalize: split compound tokens like "pid2misc" → ["pid", "misc"]
@@ -232,7 +238,7 @@ export function searchShapes(shapeIndex, tagMap, query, limit)
 
   if (terms.length === 0)
   {
-    return [];
+    return { results: [], strong: false };
   }
 
   // Collect per-term match sets
@@ -381,5 +387,23 @@ export function searchShapes(shapeIndex, tagMap, query, limit)
     });
   }
 
-  return results;
+  return {
+    results: results,
+    strong: candidates.length > 0 && candidates[0].score >= terms.length
+  };
+}
+
+/**
+ * Search the shape index, returning only the result array.
+ * See searchShapesWithMeta for the algorithm.
+ *
+ * @param {Array} shapeIndex - The flat shape array.
+ * @param {Object} tagMap - Pre-built tag→indices map from buildTagMap().
+ * @param {string} query - Space-separated search terms.
+ * @param {number} limit - Maximum results to return.
+ * @returns {Array} Matching shapes: [{style, w, h, title}].
+ */
+export function searchShapes(shapeIndex, tagMap, query, limit)
+{
+  return searchShapesWithMeta(shapeIndex, tagMap, query, limit).results;
 }

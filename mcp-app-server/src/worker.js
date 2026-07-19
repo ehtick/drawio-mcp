@@ -9,6 +9,7 @@
  */
 
 import { createServer } from "./shared.js";
+import { resolveIconServiceUrl } from "../../shared/icon-search.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { html, xmlReference, mermaidReference, shapeIndex, faviconBase64, buildId } from "./generated-html.js";
 
@@ -114,7 +115,8 @@ export class MCPSessionManager
         this.log(`[session-create] domain=${this.env.DOMAIN || "UNDEFINED"} session=${sessionId.slice(0, 8)}`);
       }
 
-      const server = createServer(html, { domain: this.env.DOMAIN, xmlReference, mermaidReference, shapeIndex, buildId });
+      const server = createServer(html, { domain: this.env.DOMAIN, xmlReference, mermaidReference, shapeIndex,
+        iconServiceUrl: resolveIconServiceUrl(this.env.DRAWIO_ICON_SERVICE_URL), buildId });
       const transport = new WebStandardStreamableHTTPServerTransport(
       {
         sessionIdGenerator: function() { return sessionId; },

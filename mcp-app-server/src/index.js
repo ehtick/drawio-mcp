@@ -8,6 +8,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildHtml, processAppBundle, processMermaidBundle, processElkBundle, createServer } from "./shared.js";
+import { resolveIconServiceUrl } from "../../shared/icon-search.js";
 import { libavoidUrls } from "./libavoid-versions.js";
 
 // Build identifier: git SHA + ISO timestamp + "-dirty" if uncommitted
@@ -150,6 +151,11 @@ if (fs.existsSync(shapeIndexPath))
   console.log("Shape index: " + shapeIndex.length + " shapes");
 }
 
+// Icon service supplementing sparse search_shapes results. Override with
+// DRAWIO_ICON_SERVICE_URL (a self-hosted service base URL, or "off" to
+// disable icon supplementation entirely).
+const iconServiceUrl = resolveIconServiceUrl(process.env.DRAWIO_ICON_SERVICE_URL);
+
 // Pre-build the HTML once. The buildId is baked into the HTML so the
 // iframe exposes it via window.__DRAWIO_BUILD (visible in DevTools).
 // `let` — the daily libavoid version check rebuilds it in place (each
@@ -210,7 +216,7 @@ async function startStreamableHTTPServer()
       console.log(`[res] method=${method || "(none)"} session=${sessionId} status=${res.statusCode} ${elapsed}ms`);
     });
 
-    const server = createServer(html, { domain: process.env.DOMAIN, xmlReference, mermaidReference, shapeIndex, buildId });
+    const server = createServer(html, { domain: process.env.DOMAIN, xmlReference, mermaidReference, shapeIndex, iconServiceUrl, buildId });
 
     const transport = new StreamableHTTPServerTransport(
     {
@@ -262,7 +268,7 @@ async function startStreamableHTTPServer()
 
 async function startStdioServer()
 {
-  await createServer(html, { domain: process.env.DOMAIN, xmlReference, mermaidReference, shapeIndex, buildId }).connect(new StdioServerTransport());
+  await createServer(html, { domain: process.env.DOMAIN, xmlReference, mermaidReference, shapeIndex, iconServiceUrl, buildId }).connect(new StdioServerTransport());
 }
 
 async function main()

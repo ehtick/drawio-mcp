@@ -30,8 +30,8 @@ Most subdirectories have their own `CLAUDE.md` with implementation details.
 - **Input**: `{ query: string, limit?: number }` - Search keywords and optional max results (default: 10, max: 50)
 - **Output**: Array of matching shapes with `{style, w, h, title}` — style strings can be used directly in mxCell attributes
 - **Search**: AND logic across space-separated terms, exact + Soundex phonetic matching
-- **Coverage**: ~10,000+ shapes across all draw.io libraries (AWS, Azure, GCP, P&ID, electrical, Cisco, Kubernetes, UML, BPMN, etc.)
-- **Use case**: Call before `create_diagram` only for diagrams needing industry-specific icons (cloud, network, P&ID, electrical, Cisco, Kubernetes). Skip for standard diagrams (flowcharts, UML, ERD, org charts) that use basic geometric shapes
+- **Coverage**: ~10,000+ shapes across all draw.io libraries (AWS, Azure, GCP, P&ID, electrical, Cisco, Kubernetes, UML, BPMN, etc.), supplemented live by the draw.io icon service (`icons.diagrams.net` — brand logos and general-purpose concept icons, returned as `shape=image` styles) when the local index has no strong match
+- **Use case**: Call before `create_diagram` only for diagrams needing industry-specific, branded, or pictorial icons (cloud, network, P&ID, electrical, Cisco, Kubernetes, product logos). Skip for standard diagrams (flowcharts, UML, ERD, org charts) that use basic geometric shapes
 
 ## MCP Tool Server Tools
 
@@ -82,7 +82,7 @@ Opens the draw.io editor with a Mermaid.js diagram definition.
 
 ### `search_shapes`
 
-Searches the draw.io shape library by keywords (same tool as the app server's `search_shapes`, sharing `shared/shape-search.js`). The ~4.6 MB index is not bundled in the npm package — it is fetched from the CDN on first use (overridable via `DRAWIO_SHAPE_INDEX_URL`), or read locally in an in-repo checkout.
+Searches the draw.io shape library by keywords (same tool as the app server's `search_shapes`, sharing `shared/shape-search.js` and `shared/icon-search.js`). The ~4.6 MB index is not bundled in the npm package — it is fetched from the CDN on first use (overridable via `DRAWIO_SHAPE_INDEX_URL`), or read locally in an in-repo checkout. Results are supplemented live from the draw.io icon service when the local index has no strong match (overridable via `DRAWIO_ICON_SERVICE_URL`, set to `off` to disable).
 
 **Parameters:**
 - `query` (required): Space-separated search keywords (e.g. `aws lambda`, `cisco router`, `kubernetes pod`)

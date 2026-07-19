@@ -179,7 +179,7 @@ Opens the draw.io editor with a Mermaid.js diagram.
 
 ### `search_shapes`
 
-Searches the draw.io shape library (~10,000 shapes: AWS, Azure, GCP, Cisco, Kubernetes, P&ID, electrical, BPMN, …) and returns matching shapes with ready-to-use style strings for `open_drawio_xml`. Use only for diagrams needing industry-specific icons — standard flowcharts, UML, ERD, and org charts don't need it.
+Searches the draw.io shape library (~10,000 shapes: AWS, Azure, GCP, Cisco, Kubernetes, P&ID, electrical, BPMN, …) and returns matching shapes with ready-to-use style strings for `open_drawio_xml`. When the built-in libraries have no good match, results are supplemented from the draw.io icon service (brand logos and general-purpose concept icons, e.g. `react`, `slack`, `shopping cart`). Use only for diagrams needing industry-specific, branded, or pictorial icons — standard flowcharts, UML, ERD, and org charts don't need it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

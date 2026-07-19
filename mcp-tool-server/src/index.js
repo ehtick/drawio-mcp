@@ -140,6 +140,40 @@ function loadShapeSearch()
   return shapeSearchPromise;
 }
 
+// Icon service supplementing weak or sparse search_shapes results with brand
+// logos and general-purpose concept icons (the editor sidebar's grouped icon
+// search, shared/icon-search.js). Override the endpoint with
+// DRAWIO_ICON_SERVICE_URL (a self-hosted service base URL, or "off" to
+// disable icon supplementation entirely).
+let iconSearchPromise = null;
+
+// Resolve once to { searchShapesAndIcons, serviceUrl }, cached for the
+// process; null only if the module itself cannot be imported. Same dual-path
+// import as the shape-search module (serviceUrl null means icons disabled —
+// searchShapesAndIcons then runs the local search only).
+function loadIconSearch()
+{
+  if (!iconSearchPromise)
+  {
+    iconSearchPromise = (async function()
+    {
+      const mod = await import("./icon-search.js")
+        .catch(function() { return import("../../shared/icon-search.js"); });
+
+      return {
+        searchShapesAndIcons: mod.searchShapesAndIcons,
+        serviceUrl: mod.resolveIconServiceUrl(process.env.DRAWIO_ICON_SERVICE_URL),
+      };
+    })().catch(function()
+    {
+      // Icon results are strictly a supplement — degrade to local-only
+      return null;
+    });
+  }
+
+  return iconSearchPromise;
+}
+
 // Longest URL the Windows shell opens reliably from a .url file:
 // the InternetShortcut handler fails with Win32 error 122 ("The data
 // area passed to a system call is too small") beyond
@@ -490,14 +524,17 @@ tools.push({
   name: "search_shapes",
   description:
     "Search the draw.io shape library by keywords. Returns matching shapes with " +
-    "their exact style strings, dimensions, and titles. Use ONLY for diagrams that " +
-    "need industry-specific or branded icons (cloud architecture, network topology, " +
-    "P&ID, electrical, Cisco, Kubernetes, BPMN). Do NOT use for standard diagram " +
-    "types like flowcharts, UML, ERD, org charts, or mind maps — these use basic " +
-    "geometric shapes (rectangles, diamonds, circles, cylinders) that are already " +
-    "covered in the XML reference. Also skip if the user asks to use basic/simple " +
-    "shapes or says not to search. The style string from the results can be " +
-    "used directly in mxCell style attributes.",
+    "their exact style strings, dimensions, and titles. Covers ~10,000 built-in " +
+    "stencils (cloud architecture, network topology, P&ID, electrical, Cisco, " +
+    "Kubernetes, BPMN) and, when those are sparse, supplements results with the " +
+    "draw.io icon service (brand/product logos and general-purpose concept icons, " +
+    "e.g. 'react', 'slack', 'shopping cart', 'solar panel'). Use ONLY for diagrams " +
+    "that need industry-specific, branded, or pictorial icons. Do NOT use for " +
+    "standard diagram types like flowcharts, UML, ERD, org charts, or mind maps — " +
+    "these use basic geometric shapes (rectangles, diamonds, circles, cylinders) " +
+    "that are already covered in the XML reference. Also skip if the user asks to " +
+    "use basic/simple shapes or says not to search. The style string from the " +
+    "results can be used directly in mxCell style attributes.",
   inputSchema:
   {
     type: "object",
@@ -573,7 +610,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) =>
       }
 
       const limit = Math.min(args?.limit || 10, 50);
-      const results = shapeSearch.searchShapes(shapeSearch.shapeIndex, shapeSearch.tagMap, query, limit);
+      const iconSearch = await loadIconSearch();
+      const results = iconSearch
+        ? await iconSearch.searchShapesAndIcons(shapeSearch.shapeIndex,
+            shapeSearch.tagMap, query, limit, { serviceUrl: iconSearch.serviceUrl })
+        : shapeSearch.searchShapes(shapeSearch.shapeIndex, shapeSearch.tagMap, query, limit);
 
       if (results.length === 0)
       {
