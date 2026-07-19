@@ -5,7 +5,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { normalizeDiagramXml, INVALID_DIAGRAM_XML_MESSAGE } from "./normalize-diagram-xml.js";
+import { normalizeDiagramXml, absolutizeImageUrls, INVALID_DIAGRAM_XML_MESSAGE } from "./normalize-diagram-xml.js";
 import { buildTagMap } from "../../shared/shape-search.js";
 import { searchShapesAndIcons, DEFAULT_ICON_SERVICE_URL } from "../../shared/icon-search.js";
 
@@ -449,6 +449,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
     <script>
 ${appWithDepsJs}
 ${normalizeDiagramXml.toString()}
+${absolutizeImageUrls.toString()}
 
 // --- XML healing for partial/streaming XML ---
 
@@ -4217,6 +4218,7 @@ var lastFinalizedKey = null;
 function finalizeStreamingView(xml, opts)
 {
   opts = opts || {};
+  xml = absolutizeImageUrls(xml);
 
   var key = (xml || '') + '|' + (opts.postLayout || '') + '|' + (opts.routing || '') + '|' + (opts.replaceMode ? 'r' : '');
   if (key === lastFinalizedKey)
@@ -5796,6 +5798,8 @@ app.ontoolinputpartial = function(params)
     return;
   }
 
+  healedXml = absolutizeImageUrls(healedXml);
+
   // Update loading text during streaming
   if (loadingEl.style.display !== 'none')
   {
@@ -6677,7 +6681,7 @@ export function createServer(html, options = {})
         };
       }
 
-      var xmlPayload = { xml: normalizedXml };
+      var xmlPayload = { xml: absolutizeImageUrls(normalizedXml) };
       if (postLayout) xmlPayload.postLayout = postLayout;
       // direction + routing are XML-only; Mermaid derives direction from the
       // flowchart code and its layout already routes, so routing is omitted there.
