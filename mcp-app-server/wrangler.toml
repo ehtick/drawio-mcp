@@ -3,8 +3,21 @@ main = "src/worker.js"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+# The dash-managed route only covers mcp.draw.io/mcp* — /carousel/* needs
+# its own route or requests 522 against a nonexistent origin.
+routes = [
+  { pattern = "mcp.draw.io/mcp*", zone_name = "draw.io" },
+  { pattern = "mcp.draw.io/carousel/*", zone_name = "draw.io" }
+]
+
 [build]
 command = "node src/build-html.js"
+
+# Static assets (directory listing in the connectors-directory carousel).
+# Requests matching a file under public/ are served directly; everything
+# else (e.g. /mcp) falls through to the Worker.
+[assets]
+directory = "./public"
 
 [[durable_objects.bindings]]
 name = "MCP_SESSION_MANAGER"
@@ -25,3 +38,6 @@ class_name = "MCPSessionManager"
 [[env.staging.migrations]]
 tag = "v1"
 new_classes = ["MCPSessionManager"]
+
+[env.staging.assets]
+directory = "./public"
